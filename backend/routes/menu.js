@@ -3,6 +3,7 @@ import { queryAll, queryOne, run } from '../db.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
 
 const router = Router();
+const MAX_IMAGE_LENGTH = 5 * 1024 * 1024;
 
 function formatDish(d) {
   return {
@@ -11,6 +12,26 @@ function formatDish(d) {
     available: !!d.available, veg: !!d.veg, glutenFree: !!d.gluten_free,
     spicy: !!d.spicy, prepTime: d.prep_time, rating: d.rating,
   };
+}
+
+function validateImage(image) {
+  if (!image) return '🍽️';
+  if (typeof image !== 'string') {
+    const error = new Error('Image invalide');
+    error.status = 400;
+    throw error;
+  }
+  if (image.length > MAX_IMAGE_LENGTH) {
+    const error = new Error('Image trop volumineuse');
+    error.status = 413;
+    throw error;
+  }
+  if (image.startsWith('data:') && !image.startsWith('data:image/')) {
+    const error = new Error('Format image invalide');
+    error.status = 400;
+    throw error;
+  }
+  return image;
 }
 
 // Public: get menu
@@ -26,10 +47,16 @@ router.post('/', authMiddleware, adminOnly, (req, res) => {
     return res.status(400).json({ error: 'Nom, prix et categorie requis' });
   }
   const cleanStock = Math.max(0, Number(stock) || 0);
+  let cleanImage;
+  try {
+    cleanImage = validateImage(image);
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
+  }
 
   const result = run(
     'INSERT INTO dishes (name, description, price, category, image, stock, available, veg, gluten_free, spicy, prep_time) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-    [name, description || '', price, category, image || '🍽️', cleanStock, available && cleanStock > 0 ? 1 : 0, veg ? 1 : 0, glutenFree ? 1 : 0, spicy ? 1 : 0, prepTime || 15]
+    [name, description || '', price, category, cleanImage, cleanStock, cleanStock > 0 ? 1 : 0, veg ? 1 : 0, glutenFree ? 1 : 0, spicy ? 1 : 0, prepTime || 15]
   );
 
   const dish = queryOne('SELECT * FROM dishes WHERE id = ?', [result.lastInsertRowid]);
@@ -43,16 +70,15 @@ router.patch('/:id', authMiddleware, adminOnly, (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Plat introuvable' });
 
   const b = req.body;
-  const newStock = Math.max(0, Number(b.stock ?? existing.stock) || 0);
-  // Auto-update available based on stock if not explicitly set
-  let newAvailable;
-  if (newStock <= 0) {
-    newAvailable = 0;
-  } else if (b.available != null) {
-    newAvailable = b.available ? 1 : 0;
-  } else {
-    newAvailable = existing.available;
+  let cleanImage;
+  try {
+    cleanImage = b.image != null ? validateImage(b.image) : existing.image;
+  } catch (error) {
+    return res.status(error.status || 400).json({ error: error.message });
   }
+  const newStock = Math.max(0, Number(b.stock ?? existing.stock) || 0);
+  // In this app, stock is the source of truth for client availability.
+  const newAvailable = newStock > 0 ? 1 : 0;
 
   run(
     `UPDATE dishes SET
@@ -62,7 +88,7 @@ router.patch('/:id', authMiddleware, adminOnly, (req, res) => {
     [
       b.name ?? existing.name, b.description ?? existing.description,
       b.price ?? existing.price, b.category ?? existing.category,
-      b.image ?? existing.image, newStock, newAvailable,
+      cleanImage, newStock, newAvailable,
       b.veg != null ? (b.veg ? 1 : 0) : existing.veg,
       b.glutenFree != null ? (b.glutenFree ? 1 : 0) : existing.gluten_free,
       b.spicy != null ? (b.spicy ? 1 : 0) : existing.spicy,

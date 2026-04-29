@@ -6,7 +6,7 @@ import {
   Clock, CheckCircle, X, ChefHat, Utensils, Home, Menu as MenuIcon,
   BarChart3, Settings, Eye, EyeOff, Save, AlertCircle, DollarSign,
   QrCode, LogOut, Users, CreditCard, History, Printer, Download, KeyRound,
-  Volume2, FileText
+  Volume2
 } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +20,7 @@ import {
 import { connectWs, onWsMessage, disconnectWs } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishModal from '../components/DishModal';
+import DishImage from '../components/DishImage';
 
 export default function AdminPage() {
   const navigate = useNavigate();
@@ -280,8 +281,8 @@ export default function AdminPage() {
       <NotificationBanner notification={notification} />
 
       {/* Sidebar */}
-      <div className="fixed left-0 top-0 bottom-0 w-64 p-4 hidden lg:block" style={{ background: colors.primaryDark }}>
-        <div className="flex items-center gap-3 mb-8 px-2">
+      <div className="fixed left-0 top-0 bottom-0 w-64 p-4 hidden lg:flex lg:flex-col" style={{ background: colors.primaryDark }}>
+        <div className="flex items-center gap-3 mb-6 px-2 flex-shrink-0">
           <div className="p-2 rounded-lg" style={{ background: colors.gold }}>
             <ChefHat size={24} style={{ color: colors.primaryDark }} />
           </div>
@@ -290,7 +291,7 @@ export default function AdminPage() {
             <p className="text-xs" style={{ color: colors.sandDark }}>Admin Panel</p>
           </div>
         </div>
-        <nav className="space-y-1">
+        <nav className="space-y-1 flex-1 overflow-y-auto pr-1">
           {sidebarItems.map(item => (
             <button key={item.id} onClick={() => setAdminTab(item.id)} className="w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all" style={{ background: adminTab === item.id ? colors.primary : 'transparent', color: colors.cream }}>
               <div className="flex items-center gap-3">
@@ -300,10 +301,10 @@ export default function AdminPage() {
               {item.badge > 0 && <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: colors.gold, color: colors.primaryDark }}>{item.badge}</span>}
             </button>
           ))}
-          <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-8" style={{ color: colors.sandDark }}>
-            <LogOut size={20} /> <span className="font-medium">Deconnexion</span>
-          </button>
         </nav>
+        <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-4 flex-shrink-0" style={{ background: colors.primary, color: colors.cream }}>
+          <LogOut size={20} /> <span className="font-medium">Deconnexion</span>
+        </button>
       </div>
 
       {/* Mobile header */}
@@ -488,7 +489,12 @@ export default function AdminPage() {
                 <div className="space-y-2">
                   {(reports.topDishes || []).map(dish => (
                     <div key={dish.name} className="flex items-center justify-between py-2 border-b" style={{ borderColor: colors.sand }}>
-                      <span>{dish.image} {dish.name}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="w-8 h-8 rounded overflow-hidden inline-block" style={{ background: colors.sand }}>
+                          <DishImage value={dish.image} emojiClassName="text-xl" rounded="rounded" />
+                        </span>
+                        {dish.name}
+                      </span>
                       <span className="font-bold">{dish.quantity}</span>
                     </div>
                   ))}
@@ -513,7 +519,9 @@ export default function AdminPage() {
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               {dishes.map(dish => (
                 <div key={dish.id} className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white' }}>
-                  <div className="h-32 flex items-center justify-center text-7xl" style={{ background: colors.sand }}>{dish.image}</div>
+                  <div className="h-40 overflow-hidden" style={{ background: colors.sand }}>
+                    <DishImage value={dish.image} emojiClassName="text-7xl" rounded="rounded-none" />
+                  </div>
                   <div className="p-4">
                     <div className="flex items-start justify-between mb-2">
                       <h3 className="font-bold" style={{ color: colors.text }}>{dish.name}</h3>
@@ -567,7 +575,9 @@ export default function AdminPage() {
                       <tr key={dish.id} className="border-t" style={{ borderColor: colors.sand }}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <span className="text-2xl">{dish.image}</span>
+                            <span className="w-10 h-10 rounded overflow-hidden flex-shrink-0" style={{ background: colors.sand }}>
+                              <DishImage value={dish.image} emojiClassName="text-2xl" rounded="rounded" />
+                            </span>
                             <span className="font-medium text-sm" style={{ color: colors.text }}>{dish.name}</span>
                           </div>
                         </td>
@@ -627,7 +637,9 @@ export default function AdminPage() {
                   ) : (stats.topDishes || []).map((dish, i) => (
                     <div key={dish.dishId || dish.name} className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm" style={{ background: i === 0 ? colors.gold : colors.sand, color: i === 0 ? colors.primaryDark : colors.text }}>{i + 1}</div>
-                      <span className="text-2xl">{dish.image}</span>
+                      <span className="w-10 h-10 rounded overflow-hidden flex-shrink-0" style={{ background: colors.sand }}>
+                        <DishImage value={dish.image} emojiClassName="text-2xl" rounded="rounded" />
+                      </span>
                       <div className="flex-1">
                         <p className="font-medium text-sm" style={{ color: colors.text }}>{dish.name}</p>
                         <p className="text-xs" style={{ color: colors.textLight }}>{dish.quantity} vendu(s) · {dish.revenue.toLocaleString()} FCFA</p>

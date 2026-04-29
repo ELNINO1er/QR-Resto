@@ -5,6 +5,7 @@ import { colors } from '../lib/colors';
 import { useCart } from '../context/CartContext';
 import { getMenu, createOrder, getPublicSettings } from '../lib/api';
 import { NotificationBanner, useNotification } from '../components/Notification';
+import DishImage from '../components/DishImage';
 
 const categories = [
   { id: 'all', name: 'Tout', icon: '🍽️' },
@@ -194,8 +195,8 @@ export default function MenuPage() {
           {filteredDishes.map(dish => (
             <div key={dish.id} className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white', opacity: dish.available ? 1 : 0.5 }}>
               <div className="flex">
-                <div className="w-28 h-28 flex items-center justify-center text-6xl flex-shrink-0" style={{ background: colors.sand }}>
-                  {dish.image}
+                <div className="w-28 h-28 flex-shrink-0 overflow-hidden" style={{ background: colors.sand }}>
+                  <DishImage value={dish.image} emojiClassName="text-6xl" rounded="rounded-none" />
                 </div>
                 <div className="flex-1 p-3">
                   <div className="flex items-start justify-between mb-1">
@@ -254,7 +255,9 @@ export default function MenuPage() {
             <div className="px-6 py-4 space-y-3">
               {cart.map(item => (
                 <div key={item.id} className="rounded-xl p-3 flex items-center gap-3" style={{ background: 'white' }}>
-                  <div className="text-4xl">{item.image}</div>
+                  <div className="w-14 h-14 rounded-lg overflow-hidden flex-shrink-0" style={{ background: colors.sand }}>
+                    <DishImage value={item.image} emojiClassName="text-4xl" rounded="rounded-lg" />
+                  </div>
                   <div className="flex-1">
                     <h4 className="font-bold text-sm" style={{ color: colors.text }}>{item.name}</h4>
                     <p className="text-sm" style={{ color: colors.primary }}>{(item.price * item.qty).toLocaleString()} FCFA</p>

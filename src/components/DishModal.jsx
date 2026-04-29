@@ -1,11 +1,34 @@
 import React, { useState } from 'react';
-import { X } from 'lucide-react';
+import { ImagePlus, X } from 'lucide-react';
 import { colors } from '../lib/colors';
+import DishImage from './DishImage';
 
 const emojis = ['🍽️','🍲','🥗','🍰','🥤','🍔','🍕','🍣','🍜','🌮','🍛','🍗','🥘','🍱','🍝','🥙','🌯','🍤','🍩','🍪','🍫','🍦','🥐','🥖','🍟','🌭','🥨','🥯','🧀','🥩','🥓','🍳','🥚','🍞','🥞','🧇','🍇','🍈','🍉','🍊','🍋','🍌','🍍','🥭','🍎','🍏','🍐','🍑','🍒','🍓','🥝','🥥','🍅','🥑','🥒','🥬','🥦','🥕','🌽','🌶️','🥔','🍠'];
 
 export default function DishModal({ dish, onSave, onClose }) {
   const [form, setForm] = useState(dish);
+  const [imageError, setImageError] = useState('');
+
+  const handleImageUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setImageError('Choisissez un fichier image');
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setImageError('Image trop lourde: maximum 3 Mo');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setForm({ ...form, image: reader.result });
+      setImageError('');
+    };
+    reader.onerror = () => setImageError('Lecture image impossible');
+    reader.readAsDataURL(file);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }}>
@@ -24,9 +47,19 @@ export default function DishModal({ dish, onSave, onClose }) {
             <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} rows="2" className="w-full px-3 py-2 rounded-lg border-2 focus:outline-none" style={{ borderColor: colors.sandDark, background: 'white' }} />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Image (emoji)</label>
-            <div className="flex items-center gap-3 mb-2">
-              <div className="text-5xl w-16 h-16 flex items-center justify-center rounded-lg" style={{ background: colors.sand }}>{form.image}</div>
+            <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Image du plat</label>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-24 h-24 rounded-lg overflow-hidden flex-shrink-0" style={{ background: colors.sand }}>
+                <DishImage value={form.image} emojiClassName="text-5xl" rounded="rounded-lg" />
+              </div>
+              <div className="flex-1">
+                <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium cursor-pointer" style={{ background: colors.primary, color: colors.cream }}>
+                  <ImagePlus size={18} /> Charger une photo
+                  <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                </label>
+                <p className="text-xs mt-2" style={{ color: colors.textLight }}>JPG, PNG ou WebP, 3 Mo maximum. Les emojis restent possibles.</p>
+                {imageError && <p className="text-xs mt-1" style={{ color: colors.primary }}>{imageError}</p>}
+              </div>
             </div>
             <div className="grid grid-cols-10 gap-1 max-h-32 overflow-y-auto p-2 rounded-lg" style={{ background: 'white' }}>
               {emojis.map(e => (
