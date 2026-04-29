@@ -4,10 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite",
+    "dev:backend": "cd backend && node --watch server.js",
+    "dev:all": "start /B cmd /c \"cd backend && node server.js\" && vite",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "preview": "vite preview --host 0.0.0.0"
   },
   "keywords": [],
   "author": "",
@@ -15,8 +16,10 @@
   "type": "commonjs",
   "dependencies": {
     "lucide-react": "^1.14.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.14.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.4",
