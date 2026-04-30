@@ -21,6 +21,7 @@ import { connectWs, onWsMessage, disconnectWs } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishModal from '../components/DishModal';
 import DishImage from '../components/DishImage';
+import Dropdown from '../components/Dropdown';
 
 export default function AdminPage() {
   const navigate = useNavigate();
@@ -319,9 +320,13 @@ export default function AdminPage() {
           <span className="font-bold" style={{ color: colors.cream }}>Admin</span>
         </div>
         <div className="flex items-center gap-2">
-          <select value={adminTab} onChange={e => setAdminTab(e.target.value)} className="px-3 py-2 rounded-lg" style={{ background: colors.primary, color: colors.cream, border: 'none' }}>
-            {sidebarItems.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}
-          </select>
+          <Dropdown
+            value={adminTab}
+            onChange={setAdminTab}
+            options={sidebarItems.map(i => ({ value: i.id, label: i.label }))}
+            className="min-w-44"
+            buttonStyle={{ background: colors.primary, borderColor: colors.primary, color: colors.cream, minHeight: 40, paddingTop: 8, paddingBottom: 8 }}
+          />
           <button onClick={handleLogout} className="p-2 rounded-lg" style={{ color: colors.cream }}>
             <LogOut size={20} />
           </button>
@@ -433,12 +438,18 @@ export default function AdminPage() {
                       <td className="px-4 py-3">{order.total.toLocaleString()} FCFA</td>
                       <td className="px-4 py-3">{order.paymentStatus === 'paid' ? 'Paye' : order.paymentStatus === 'refunded' ? 'Rembourse' : 'Non paye'}</td>
                       <td className="px-4 py-3">
-                        <select value={order.paymentMethod || ''} onChange={e => handleUpdatePayment(order, order.paymentStatus || 'unpaid', e.target.value)} className="px-2 py-1 rounded border">
-                          <option value="">Aucune</option>
-                          <option value="cash">Especes</option>
-                          <option value="mobile_money">Mobile money</option>
-                          <option value="card">Carte</option>
-                        </select>
+                        <Dropdown
+                          value={order.paymentMethod || ''}
+                          onChange={method => handleUpdatePayment(order, order.paymentStatus || 'unpaid', method)}
+                          options={[
+                            { value: '', label: 'Aucune' },
+                            { value: 'cash', label: 'Especes' },
+                            { value: 'mobile_money', label: 'Mobile money' },
+                            { value: 'card', label: 'Carte' },
+                          ]}
+                          className="min-w-40"
+                          buttonStyle={{ minHeight: 38, paddingTop: 7, paddingBottom: 7 }}
+                        />
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
@@ -716,12 +727,16 @@ export default function AdminPage() {
               <div className="grid md:grid-cols-5 gap-3">
                 <input placeholder="Nom" value={newUser.name} onChange={e => setNewUser({ ...newUser, name: e.target.value })} className="px-3 py-2 rounded-lg border" />
                 <input placeholder="Email" value={newUser.email} onChange={e => setNewUser({ ...newUser, email: e.target.value })} className="px-3 py-2 rounded-lg border" />
-                <select value={newUser.role} onChange={e => setNewUser({ ...newUser, role: e.target.value })} className="px-3 py-2 rounded-lg border">
-                  <option value="serveur">Serveur</option>
-                  <option value="cuisine">Cuisine</option>
-                  <option value="caisse">Caisse</option>
-                  <option value="admin">Admin</option>
-                </select>
+                <Dropdown
+                  value={newUser.role}
+                  onChange={role => setNewUser({ ...newUser, role })}
+                  options={[
+                    { value: 'serveur', label: 'Serveur' },
+                    { value: 'cuisine', label: 'Cuisine' },
+                    { value: 'caisse', label: 'Caisse' },
+                    { value: 'admin', label: 'Admin' },
+                  ]}
+                />
                 <input type="password" placeholder="Mot de passe" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })} className="px-3 py-2 rounded-lg border" />
                 <button onClick={handleCreateUser} className="rounded-lg font-medium" style={{ background: colors.primary, color: colors.cream }}>Ajouter</button>
               </div>

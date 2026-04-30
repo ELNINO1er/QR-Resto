@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ShoppingCart, Plus, Minus, X, Search, Filter, Star, Clock, ArrowLeft } from 'lucide-react';
+import QRCode from 'qrcode';
+import { ShoppingCart, Plus, Minus, X, Search, Filter, Star, Clock, ArrowLeft, QrCode } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useCart } from '../context/CartContext';
-import { getMenu, createOrder, getPublicSettings } from '../lib/api';
+import { getMenu, createOrder, getPublicSettings, getNetworkInfo } from '../lib/api';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishImage from '../components/DishImage';
+import Dropdown from '../components/Dropdown';
 
 const categories = [
   { id: 'all', name: 'Tout', icon: '🍽️' },
@@ -31,6 +33,9 @@ export default function MenuPage() {
   const [orderNotes, setOrderNotes] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedTable, setSelectedTable] = useState(1);
+  const [qrOrigin, setQrOrigin] = useState(window.location.origin);
+  const [tableQr, setTableQr] = useState('');
 
   // Get table number from URL
   useEffect(() => {
@@ -42,8 +47,7 @@ export default function MenuPage() {
         localStorage.setItem('table', String(num));
       }
     } else {
-      const saved = localStorage.getItem('table');
-      if (saved) setTableNumber(parseInt(saved));
+      setTableNumber(null);
     }
   }, [searchParams, setTableNumber]);
 
@@ -58,6 +62,24 @@ export default function MenuPage() {
       .catch(() => showNotif('Erreur de chargement du menu', 'warning'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    getNetworkInfo()
+      .then(info => {
+        const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+        setQrOrigin(isLocalhost && info.origin ? info.origin : window.location.origin);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const url = `${qrOrigin}/t/${selectedTable}`;
+    QRCode.toDataURL(url, {
+      margin: 1,
+      width: 220,
+      color: { dark: colors.primaryDark, light: '#FFFFFF' },
+    }).then(setTableQr).catch(() => setTableQr(''));
+  }, [qrOrigin, selectedTable]);
 
   const filteredDishes = dishes.filter(d => {
     if (selectedCategory !== 'all' && d.category !== selectedCategory) return false;
@@ -113,26 +135,53 @@ export default function MenuPage() {
       setTableNumber(num);
       localStorage.setItem('table', String(num));
     };
+    const tableOptions = Array.from({ length: tablesCount }, (_, i) => i + 1);
     return (
-      <div className="min-h-screen flex items-center justify-center px-4" style={{ background: `linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%)` }}>
-        <div className="w-full max-w-md">
-          <div className="text-center mb-8">
-            <div className="text-6xl mb-4">🍽️</div>
-            <h1 className="text-3xl font-bold mb-2" style={{ color: colors.cream, fontFamily: 'serif' }}>{restaurantName}</h1>
-            <p style={{ color: colors.sandDark }}>Selectionnez votre table pour commencer</p>
-          </div>
-          <div className="rounded-2xl p-6" style={{ background: colors.cream }}>
-            <div className="grid grid-cols-4 gap-3">
-              {Array.from({ length: tablesCount }, (_, i) => i + 1).map(num => (
-                <button key={num} onClick={() => selectTable(num)} className="aspect-square rounded-xl flex items-center justify-center font-bold text-lg transition-all hover:scale-105 shadow-md" style={{ background: 'white', color: colors.primary }}>
-                  {num}
-                </button>
-              ))}
+      <div className="min-h-screen flex items-center justify-center px-4 py-10" style={{ background: `linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%)` }}>
+        <div className="w-full max-w-5xl grid lg:grid-cols-[1fr_420px] gap-6 items-stretch">
+          <section className="rounded-2xl p-8 lg:p-10 flex flex-col justify-between" style={{ background: colors.cream }}>
+            <div>
+              <div className="text-6xl mb-5">🍽️</div>
+              <h1 className="text-3xl lg:text-4xl font-bold mb-3" style={{ color: colors.text, fontFamily: 'serif' }}>{restaurantName}</h1>
+              <p className="text-lg mb-8" style={{ color: colors.textLight }}>Scannez le QR code de votre table pour ouvrir directement le menu et commander.</p>
+              <div className="rounded-xl p-4 mb-6" style={{ background: colors.sand }}>
+                <div className="flex items-start gap-3">
+                  <QrCode size={22} style={{ color: colors.primary }} />
+                  <div>
+                    <p className="font-bold" style={{ color: colors.text }}>Parcours recommande</p>
+                    <p className="text-sm" style={{ color: colors.textLight }}>Chaque table a son QR code imprime. Le client scanne et arrive directement sur la bonne table.</p>
+                  </div>
+                </div>
+              </div>
             </div>
-            <p className="text-center text-xs mt-4" style={{ color: colors.textLight }}>
-              Ou scannez le QR code sur votre table
-            </p>
-          </div>
+            <p className="text-sm" style={{ color: colors.textLight }}>Adresse QR exemple: {qrOrigin}/t/{selectedTable}</p>
+          </section>
+
+          <section className="rounded-2xl p-6 shadow-2xl" style={{ background: colors.cream }}>
+            <h2 className="text-xl font-bold mb-1" style={{ color: colors.text }}>Acces rapide</h2>
+            <p className="text-sm mb-5" style={{ color: colors.textLight }}>Pour tester sans QR, choisissez une table.</p>
+
+            <label className="block text-sm font-bold mb-2" style={{ color: colors.text }}>Table</label>
+            <Dropdown
+              value={selectedTable}
+              onChange={setSelectedTable}
+              options={tableOptions.map(num => ({ value: num, label: `Table ${num}` }))}
+              className="mb-4"
+              buttonStyle={{ minHeight: 58, fontSize: 18, fontWeight: 700 }}
+            />
+
+            <button onClick={() => selectTable(selectedTable)} className="w-full py-4 rounded-xl font-bold text-lg mb-6" style={{ background: colors.primary, color: colors.cream }}>
+              Voir le menu de la table {selectedTable}
+            </button>
+
+            <div className="rounded-xl p-4 text-center" style={{ background: 'white' }}>
+              <p className="font-bold mb-3" style={{ color: colors.text }}>QR code test</p>
+              <div className="w-56 h-56 mx-auto rounded-xl flex items-center justify-center" style={{ background: colors.sand }}>
+                {tableQr ? <img src={tableQr} alt={`QR table ${selectedTable}`} className="w-52 h-52 object-contain rounded-lg" /> : <QrCode size={96} style={{ color: colors.primary }} />}
+              </div>
+              <p className="text-xs mt-3 break-all" style={{ color: colors.textLight }}>{qrOrigin}/t/{selectedTable}</p>
+            </div>
+          </section>
         </div>
       </div>
     );

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { colors } from '../lib/colors';
 import DishImage from './DishImage';
+import Dropdown from './Dropdown';
 
 const emojis = ['🍽️','🍲','🥗','🍰','🥤','🍔','🍕','🍣','🍜','🌮','🍛','🍗','🥘','🍱','🍝','🥙','🌯','🍤','🍩','🍪','🍫','🍦','🥐','🥖','🍟','🌭','🥨','🥯','🧀','🥩','🥓','🍳','🥚','🍞','🥞','🧇','🍇','🍈','🍉','🍊','🍋','🍌','🍍','🥭','🍎','🍏','🍐','🍑','🍒','🍓','🥝','🥥','🍅','🥑','🥒','🥬','🥦','🥕','🌽','🌶️','🥔','🍠'];
 
@@ -80,12 +81,16 @@ export default function DishModal({ dish, onSave, onClose }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Categorie</label>
-              <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border-2 focus:outline-none" style={{ borderColor: colors.sandDark, background: 'white' }}>
-                <option value="entrees">Entrees</option>
-                <option value="plats">Plats</option>
-                <option value="desserts">Desserts</option>
-                <option value="boissons">Boissons</option>
-              </select>
+              <Dropdown
+                value={form.category}
+                onChange={category => setForm({ ...form, category })}
+                options={[
+                  { value: 'entrees', label: 'Entrees' },
+                  { value: 'plats', label: 'Plats' },
+                  { value: 'desserts', label: 'Desserts' },
+                  { value: 'boissons', label: 'Boissons' },
+                ]}
+              />
             </div>
             <div>
               <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Temps prep (min)</label>
