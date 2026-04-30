@@ -32,7 +32,7 @@ export default function KitchenPage() {
 
   useEffect(() => {
     getOrders()
-      .then(data => setOrders(data.filter(o => o.status !== 'served')))
+      .then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
       .catch(() => showNotif('Erreur de chargement', 'warning'));
   }, [showNotif]);
 
@@ -46,10 +46,13 @@ export default function KitchenPage() {
       }
       if (data.type === 'ORDER_UPDATED') {
         setOrders(prev => {
-          const next = data.order.status === 'served'
-            ? prev.filter(o => o.id !== data.order.id)
-            : prev.map(o => o.id === data.order.id ? data.order : o);
-          return prev.some(o => o.id === data.order.id) ? next : [data.order, ...prev];
+          if (['served', 'cancelled'].includes(data.order.status)) {
+            return prev.filter(o => o.id !== data.order.id);
+          }
+          const next = prev.some(o => o.id === data.order.id)
+            ? prev.map(o => o.id === data.order.id ? data.order : o)
+            : [data.order, ...prev];
+          return next;
         });
       }
     });
@@ -59,7 +62,7 @@ export default function KitchenPage() {
   const setStatus = async (order, status) => {
     try {
       const updated = await updateOrderStatus(order.id, status);
-      setOrders(prev => status === 'served' ? prev.filter(o => o.id !== order.id) : prev.map(o => o.id === order.id ? updated : o));
+      setOrders(prev => ['served', 'cancelled'].includes(status) ? prev.filter(o => o.id !== order.id) : prev.map(o => o.id === order.id ? updated : o));
     } catch {
       showNotif('Erreur statut', 'warning');
     }

@@ -41,6 +41,7 @@ export async function initDb() {
       image TEXT DEFAULT '🍽️',
       stock INTEGER DEFAULT 0,
       available INTEGER DEFAULT 1,
+      visible INTEGER DEFAULT 1,
       veg INTEGER DEFAULT 0,
       gluten_free INTEGER DEFAULT 0,
       spicy INTEGER DEFAULT 0,
@@ -84,6 +85,7 @@ export async function initDb() {
   migrateColumn('orders', 'payment_status', "TEXT NOT NULL DEFAULT 'unpaid'");
   migrateColumn('orders', 'payment_method', "TEXT DEFAULT ''");
   migrateColumn('orders', 'paid_at', 'DATETIME');
+  migrateColumn('dishes', 'visible', 'INTEGER DEFAULT 1');
 
   // Seed data
   const userCount = queryOne('SELECT COUNT(*) as count FROM users').count;

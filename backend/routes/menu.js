@@ -6,10 +6,11 @@ const router = Router();
 const MAX_IMAGE_LENGTH = 5 * 1024 * 1024;
 
 function formatDish(d) {
+  const visible = d.visible == null ? 1 : d.visible;
   return {
     id: d.id, name: d.name, description: d.description, price: d.price,
     category: d.category, image: d.image, stock: d.stock,
-    available: !!d.available, veg: !!d.veg, glutenFree: !!d.gluten_free,
+    available: !!visible && d.stock > 0, visible: !!visible, veg: !!d.veg, glutenFree: !!d.gluten_free,
     spicy: !!d.spicy, prepTime: d.prep_time, rating: d.rating,
   };
 }
@@ -42,7 +43,7 @@ router.get('/', (_req, res) => {
 
 // Admin: add dish
 router.post('/', authMiddleware, adminOnly, (req, res) => {
-  const { name, description, price, category, image, stock, available, veg, glutenFree, spicy, prepTime } = req.body;
+  const { name, description, price, category, image, stock, available, visible, veg, glutenFree, spicy, prepTime } = req.body;
   if (!name || !price || !category) {
     return res.status(400).json({ error: 'Nom, prix et categorie requis' });
   }
@@ -54,9 +55,11 @@ router.post('/', authMiddleware, adminOnly, (req, res) => {
     return res.status(error.status || 400).json({ error: error.message });
   }
 
+  const cleanVisible = visible != null ? (visible ? 1 : 0) : (available != null ? (available ? 1 : 0) : 1);
+
   const result = run(
-    'INSERT INTO dishes (name, description, price, category, image, stock, available, veg, gluten_free, spicy, prep_time) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-    [name, description || '', price, category, cleanImage, cleanStock, cleanStock > 0 ? 1 : 0, veg ? 1 : 0, glutenFree ? 1 : 0, spicy ? 1 : 0, prepTime || 15]
+    'INSERT INTO dishes (name, description, price, category, image, stock, available, visible, veg, gluten_free, spicy, prep_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    [name, description || '', price, category, cleanImage, cleanStock, cleanVisible && cleanStock > 0 ? 1 : 0, cleanVisible, veg ? 1 : 0, glutenFree ? 1 : 0, spicy ? 1 : 0, prepTime || 15]
   );
 
   const dish = queryOne('SELECT * FROM dishes WHERE id = ?', [result.lastInsertRowid]);
@@ -77,18 +80,23 @@ router.patch('/:id', authMiddleware, adminOnly, (req, res) => {
     return res.status(error.status || 400).json({ error: error.message });
   }
   const newStock = Math.max(0, Number(b.stock ?? existing.stock) || 0);
-  // In this app, stock is the source of truth for client availability.
-  const newAvailable = newStock > 0 ? 1 : 0;
+  const existingVisible = existing.visible == null ? 1 : existing.visible;
+  const newVisible = b.visible != null
+    ? (b.visible ? 1 : 0)
+    : b.available != null
+      ? (b.available ? 1 : 0)
+      : existingVisible;
+  const newAvailable = newVisible && newStock > 0 ? 1 : 0;
 
   run(
     `UPDATE dishes SET
       name = ?, description = ?, price = ?, category = ?, image = ?,
-      stock = ?, available = ?, veg = ?, gluten_free = ?, spicy = ?, prep_time = ?
+      stock = ?, available = ?, visible = ?, veg = ?, gluten_free = ?, spicy = ?, prep_time = ?
     WHERE id = ?`,
     [
       b.name ?? existing.name, b.description ?? existing.description,
       b.price ?? existing.price, b.category ?? existing.category,
-      cleanImage, newStock, newAvailable,
+      cleanImage, newStock, newAvailable, newVisible,
       b.veg != null ? (b.veg ? 1 : 0) : existing.veg,
       b.glutenFree != null ? (b.glutenFree ? 1 : 0) : existing.gluten_free,
       b.spicy != null ? (b.spicy ? 1 : 0) : existing.spicy,

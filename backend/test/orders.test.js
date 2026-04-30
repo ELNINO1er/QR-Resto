@@ -12,6 +12,9 @@ let server;
 let queryOne;
 let baseUrl;
 let token;
+let createdOrder;
+let createdDishId;
+let createdQuantity;
 
 async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...options.headers };
@@ -66,6 +69,20 @@ test('order creation recalculates price and name from the database', async () =>
   assert.equal(body.total, dish.price * 2);
   assert.equal(body.items[0].name, dish.name);
   assert.equal(body.items[0].price, dish.price);
+  createdOrder = body;
+  createdDishId = dish.id;
+  createdQuantity = 2;
+});
+
+test('public order tracking returns only the matching table order', async () => {
+  assert.ok(createdOrder);
+
+  const { res, body } = await request(`/orders/${createdOrder.id}/public?table=${createdOrder.table}`);
+
+  assert.equal(res.status, 200);
+  assert.equal(body.id, createdOrder.id);
+  assert.equal(body.table, createdOrder.table);
+  assert.equal(body.status, 'pending');
 });
 
 test('order creation rejects quantities above stock', async () => {
@@ -96,4 +113,21 @@ test('admin stats are computed from real orders', async () => {
   assert.ok(Array.isArray(body.topDishes));
   assert.ok(Array.isArray(body.peakHours));
   assert.equal(body.topDishes[0].name, 'Bissap Glace');
+});
+
+test('cancelling an order restores dish stock', async () => {
+  assert.ok(token);
+  assert.ok(createdOrder);
+
+  const before = queryOne('SELECT stock FROM dishes WHERE id = ?', [createdDishId]);
+  const { res, body } = await request(`/orders/${createdOrder.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status: 'cancelled' }),
+  });
+  const after = queryOne('SELECT stock FROM dishes WHERE id = ?', [createdDishId]);
+
+  assert.equal(res.status, 200);
+  assert.equal(body.status, 'cancelled');
+  assert.equal(after.stock, before.stock + createdQuantity);
 });

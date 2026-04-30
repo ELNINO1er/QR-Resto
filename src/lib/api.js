@@ -34,6 +34,7 @@ export const deleteDish = (id) =>
 // Orders
 export const createOrder = (order) =>
   request('/orders', { method: 'POST', body: JSON.stringify(order) });
+export const getPublicOrder = (id, table) => request(`/orders/${id}/public?table=${encodeURIComponent(table)}`);
 export const getOrders = () => request('/orders');
 export const updateOrderStatus = (id, status) =>
   request(`/orders/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });

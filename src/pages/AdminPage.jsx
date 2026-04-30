@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import {
@@ -51,14 +51,22 @@ export default function AdminPage() {
   // Load data
   const loadData = useCallback(async () => {
     try {
+      const role = user?.role || 'admin';
+      const canSeeStats = ['admin', 'caisse'].includes(role);
+      const canSeeSettings = role === 'admin';
+
       const [ordersData, menuData, statsData, settingsData] = await Promise.all([
-        getOrders(), getMenu(), getStats(), getSettings()
+        getOrders(),
+        getMenu(),
+        canSeeStats ? getStats() : Promise.resolve({ todayRevenue: 0, todayOrders: 0, avgOrder: 0, lowStock: 0, topDishes: [], peakHours: [] }),
+        canSeeSettings ? getSettings() : Promise.resolve({}),
       ]);
       setOrders(ordersData);
       setDishes(menuData);
       setStats(statsData);
       setSettingsState(settingsData);
-      getReports(reportPeriod).then(setReports).catch(() => {});
+      if (canSeeStats) getReports(reportPeriod).then(setReports).catch(() => {});
+      else setReports({ sales: [], topDishes: [] });
       if (user?.role === 'admin') getUsers().then(setUsers).catch(() => {});
       getNetworkInfo().then(info => {
         const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
@@ -144,9 +152,9 @@ export default function AdminPage() {
 
   const handleToggleAvailability = async (dish) => {
     try {
-      const updated = await updateDish(dish.id, { available: !dish.available });
+      const updated = await updateDish(dish.id, { visible: !dish.visible });
       setDishes(prev => prev.map(d => d.id === dish.id ? updated : d));
-      showNotif('Disponibilite modifiee');
+      showNotif('Visibilite client modifiee');
     } catch { showNotif('Erreur', 'warning'); }
   };
 
@@ -242,18 +250,24 @@ export default function AdminPage() {
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
-  const sidebarItems = [
-    { id: 'orders', icon: ShoppingCart, label: 'Commandes', badge: orders.filter(o => o.status === 'pending').length },
-    { id: 'payments', icon: CreditCard, label: 'Paiements', badge: orders.filter(o => o.paymentStatus !== 'paid').length },
-    { id: 'menu', icon: MenuIcon, label: 'Menu' },
-    { id: 'stock', icon: Package, label: 'Stock' },
-    { id: 'history', icon: History, label: 'Historique' },
-    { id: 'stats', icon: BarChart3, label: 'Statistiques' },
-    { id: 'tables', icon: QrCode, label: 'Tables & QR' },
-    ...(user?.role === 'admin' ? [{ id: 'users', icon: Users, label: 'Utilisateurs' }] : []),
-    { id: 'settings', icon: Settings, label: 'Parametres' },
-    { id: 'security', icon: KeyRound, label: 'Securite' },
-  ];
+  const sidebarItems = useMemo(() => [
+    { id: 'orders', icon: ShoppingCart, label: 'Commandes', roles: ['admin', 'serveur', 'cuisine'], badge: orders.filter(o => o.status === 'pending').length },
+    { id: 'payments', icon: CreditCard, label: 'Paiements', roles: ['admin', 'serveur', 'caisse'], badge: orders.filter(o => o.paymentStatus !== 'paid').length },
+    { id: 'menu', icon: MenuIcon, label: 'Menu', roles: ['admin'] },
+    { id: 'stock', icon: Package, label: 'Stock', roles: ['admin'] },
+    { id: 'history', icon: History, label: 'Historique', roles: ['admin', 'caisse'] },
+    { id: 'stats', icon: BarChart3, label: 'Statistiques', roles: ['admin', 'caisse'] },
+    { id: 'tables', icon: QrCode, label: 'Tables & QR', roles: ['admin'] },
+    { id: 'users', icon: Users, label: 'Utilisateurs', roles: ['admin'] },
+    { id: 'settings', icon: Settings, label: 'Parametres', roles: ['admin'] },
+    { id: 'security', icon: KeyRound, label: 'Securite', roles: ['admin'] },
+  ].filter(item => item.roles.includes(user?.role || 'admin')), [orders, user?.role]);
+
+  useEffect(() => {
+    if (sidebarItems.length && !sidebarItems.some(item => item.id === adminTab)) {
+      setAdminTab(sidebarItems[0].id);
+    }
+  }, [adminTab, sidebarItems]);
 
   const tablesCount = parseInt(settings.tables_count) || 12;
   const tableQrUrl = useCallback((table) => `${qrOrigin}/t/${table}`, [qrOrigin]);
@@ -355,6 +369,7 @@ export default function AdminPage() {
                     preparing: { color: colors.primaryLight, label: 'En preparation', icon: ChefHat },
                     ready: { color: '#5C8A4A', label: 'Prete', icon: CheckCircle },
                     served: { color: colors.textLight, label: 'Servie', icon: Utensils },
+                    cancelled: { color: colors.primary, label: 'Annulee', icon: X },
                   };
                   const config = sc[order.status] || sc.pending;
                   const StatusIcon = config.icon;
@@ -400,6 +415,9 @@ export default function AdminPage() {
                         )}
                         {order.status === 'ready' && (
                           <button onClick={() => handleUpdateStatus(order.id, 'served')} className="col-span-2 py-2 rounded-lg text-sm font-medium" style={{ background: colors.primary, color: colors.cream }}>Servie</button>
+                        )}
+                        {!['served', 'cancelled'].includes(order.status) && (
+                          <button onClick={() => handleUpdateStatus(order.id, 'cancelled')} className="col-span-2 py-2 rounded-lg text-sm font-medium" style={{ background: '#EFD9D9', color: colors.primary }}>Annuler la commande</button>
                         )}
                         <button onClick={() => printTicket(order)} className="col-span-2 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2" style={{ background: colors.sand, color: colors.text }}>
                           <Printer size={16} /> Ticket cuisine
@@ -546,14 +564,16 @@ export default function AdminPage() {
                     <p className="text-xs mb-3 line-clamp-2" style={{ color: colors.textLight }}>{dish.description}</p>
                     <div className="flex items-center justify-between mb-3">
                       <span className="text-xs px-2 py-1 rounded" style={{ background: colors.sand, color: colors.text }}>Stock: {dish.stock}</span>
-                      <span className="text-xs px-2 py-1 rounded" style={{ background: dish.available ? '#5C8A4A20' : colors.sandDark, color: dish.available ? '#5C8A4A' : colors.textLight }}>{dish.available ? 'Disponible' : 'Epuise'}</span>
+                      <span className="text-xs px-2 py-1 rounded" style={{ background: dish.available ? '#5C8A4A20' : colors.sandDark, color: dish.available ? '#5C8A4A' : colors.textLight }}>
+                        {dish.available ? 'Disponible' : dish.visible === false ? 'Masque' : 'Epuise'}
+                      </span>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       <button onClick={() => setEditingDish(dish)} className="py-2 rounded-lg text-xs font-medium" style={{ background: colors.sand, color: colors.text }}>
                         <Edit size={16} className="mx-auto" />
                       </button>
                       <button onClick={() => handleToggleAvailability(dish)} className="py-2 rounded-lg text-xs font-medium" style={{ background: colors.gold + '40', color: colors.text }}>
-                        {dish.available ? <EyeOff size={16} className="mx-auto" /> : <Eye size={16} className="mx-auto" />}
+                        {dish.visible !== false ? <EyeOff size={16} className="mx-auto" /> : <Eye size={16} className="mx-auto" />}
                       </button>
                       <button onClick={() => handleDeleteDish(dish.id)} className="py-2 rounded-lg text-xs font-medium" style={{ background: '#EFD9D9', color: colors.primary }}>
                         <Trash2 size={16} className="mx-auto" />
@@ -834,6 +854,9 @@ export default function AdminPage() {
                 <button onClick={() => navigate('/kitchen')} className="mt-3 px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.sand, color: colors.text }}>
                   <ChefHat size={18} /> Ouvrir l'ecran cuisine
                 </button>
+                <button onClick={() => navigate('/server')} className="mt-3 px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.sand, color: colors.text }}>
+                  <ShoppingCart size={18} /> Ouvrir l'ecran serveur
+                </button>
               </div>
             </div>
           </div>
@@ -843,7 +866,7 @@ export default function AdminPage() {
       {/* Dish Modal */}
       {(showAddDish || editingDish) && (
         <DishModal
-          dish={editingDish || { name: '', description: '', price: 0, category: 'plats', image: '🍽️', stock: 0, available: true, veg: false, glutenFree: false, spicy: false, prepTime: 15 }}
+          dish={editingDish || { name: '', description: '', price: 0, category: 'plats', image: '🍽️', stock: 0, available: true, visible: true, veg: false, glutenFree: false, spicy: false, prepTime: 15 }}
           onSave={handleSaveDish}
           onClose={() => { setEditingDish(null); setShowAddDish(false); }}
         />

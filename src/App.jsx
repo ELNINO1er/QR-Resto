@@ -6,6 +6,7 @@ import MenuPage from './pages/MenuPage';
 import LoginPage from './pages/LoginPage';
 import AdminPage from './pages/AdminPage';
 import KitchenPage from './pages/KitchenPage';
+import ServerPage from './pages/ServerPage';
 
 function TableRedirect() {
   const { table } = useParams();
@@ -40,6 +41,7 @@ function AppRoutes() {
       <Route path="/login" element={user ? <Navigate to="/admin" replace /> : <LoginPage />} />
       <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
       <Route path="/kitchen" element={<ProtectedRoute><KitchenPage /></ProtectedRoute>} />
+      <Route path="/server" element={<ProtectedRoute><ServerPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/menu" replace />} />
     </Routes>
   );

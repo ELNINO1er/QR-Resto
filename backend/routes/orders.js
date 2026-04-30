@@ -73,7 +73,8 @@ function validateOrder(table, items) {
       error.status = 404;
       throw error;
     }
-    if (!dish.available) {
+    const visible = dish.visible == null ? 1 : dish.visible;
+    if (!visible || !dish.available || dish.stock <= 0) {
       const error = new Error(`${dish.name} est indisponible`);
       error.status = 409;
       throw error;
@@ -94,6 +95,18 @@ function validateOrder(table, items) {
   }
 
   return { tableNumber, orderItems, total };
+}
+
+function restoreStock(orderId) {
+  const items = queryAll('SELECT dish_id, quantity FROM order_items WHERE order_id = ?', [orderId]);
+  for (const item of items) {
+    if (item.dish_id) {
+      runNoSave(
+        'UPDATE dishes SET stock = stock + ?, available = CASE WHEN COALESCE(visible, 1) = 1 THEN 1 ELSE 0 END WHERE id = ?',
+        [item.quantity, item.dish_id]
+      );
+    }
+  }
 }
 
 // Public: create order
@@ -131,6 +144,25 @@ router.post('/', (req, res) => {
   res.status(201).json(order);
 });
 
+router.get('/:id/public', (req, res) => {
+  const table = toPositiveInt(req.query.table);
+  const orderId = toPositiveInt(req.params.id);
+  if (!table || !orderId) return res.status(400).json({ error: 'Commande et table requis' });
+
+  const order = getOrderById(orderId);
+  if (!order || order.table !== table) return res.status(404).json({ error: 'Commande introuvable' });
+
+  res.json({
+    id: order.id,
+    table: order.table,
+    total: order.total,
+    status: order.status,
+    paymentStatus: order.paymentStatus,
+    time: order.time,
+    items: order.items,
+  });
+});
+
 // Admin: get all orders
 router.get('/', authMiddleware, requireRoles('admin', 'serveur', 'cuisine', 'caisse'), (req, res) => {
   const params = [];
@@ -152,13 +184,24 @@ router.get('/', authMiddleware, requireRoles('admin', 'serveur', 'cuisine', 'cai
 // Admin: update order status
 router.patch('/:id', authMiddleware, requireRoles('admin', 'serveur', 'cuisine'), (req, res) => {
   const { status } = req.body;
-  const valid = ['pending', 'preparing', 'ready', 'served'];
+  const valid = ['pending', 'preparing', 'ready', 'served', 'cancelled'];
   if (!valid.includes(status)) {
     return res.status(400).json({ error: 'Statut invalide' });
   }
 
-  const result = run('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id]);
-  if (result.changes === 0) return res.status(404).json({ error: 'Commande introuvable' });
+  const existing = queryOne('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+  if (!existing) return res.status(404).json({ error: 'Commande introuvable' });
+  if (existing.status === 'cancelled' && status !== 'cancelled') {
+    return res.status(409).json({ error: 'Commande deja annulee' });
+  }
+  if (existing.status === 'served' && status === 'cancelled') {
+    return res.status(409).json({ error: 'Commande deja servie' });
+  }
+
+  transaction(() => {
+    if (status === 'cancelled' && existing.status !== 'cancelled') restoreStock(req.params.id);
+    runNoSave('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id]);
+  });
 
   const order = getOrderById(req.params.id);
   broadcast({ type: 'ORDER_UPDATED', order });
@@ -190,7 +233,7 @@ router.patch('/:id/payment', authMiddleware, requireRoles('admin', 'serveur', 'c
 router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), (_req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const todayOrders = queryOne(
-    "SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as revenue FROM orders WHERE date(created_at) = date(?)", [today]
+    "SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as revenue FROM orders WHERE date(created_at) = date(?) AND status != 'cancelled'", [today]
   );
   const lowStock = queryOne('SELECT COUNT(*) as count FROM dishes WHERE stock < 10 AND stock > 0');
   const topDishes = queryAll(`
@@ -201,6 +244,7 @@ router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), (_req, res
       SUM(oi.quantity) as quantity,
       SUM(oi.quantity * oi.price) as revenue
     FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id AND o.status != 'cancelled'
     LEFT JOIN dishes d ON d.id = oi.dish_id
     GROUP BY oi.dish_id, oi.name, d.image
     ORDER BY quantity DESC, revenue DESC
@@ -209,6 +253,7 @@ router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), (_req, res
   const hours = queryAll(`
     SELECT strftime('%H', created_at) as hour, COUNT(*) as count
     FROM orders
+    WHERE status != 'cancelled'
     GROUP BY hour
     ORDER BY hour
   `);
@@ -238,6 +283,7 @@ router.get('/reports', authMiddleware, requireRoles('admin', 'caisse'), (req, re
       COALESCE(SUM(total), 0) as revenue,
       COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN total ELSE 0 END), 0) as paidRevenue
     FROM orders
+    WHERE status != 'cancelled'
     GROUP BY label
     ORDER BY label DESC
     LIMIT 30
@@ -245,6 +291,7 @@ router.get('/reports', authMiddleware, requireRoles('admin', 'caisse'), (req, re
   const topDishes = queryAll(`
     SELECT oi.name, COALESCE(d.image, '') as image, SUM(oi.quantity) as quantity, SUM(oi.quantity * oi.price) as revenue
     FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id AND o.status != 'cancelled'
     LEFT JOIN dishes d ON d.id = oi.dish_id
     GROUP BY oi.dish_id, oi.name, d.image
     ORDER BY quantity DESC, revenue DESC

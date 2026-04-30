@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { ShoppingCart, Plus, Minus, X, Search, Filter, Star, Clock, ArrowLeft, QrCode } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, X, Search, Filter, Star, Clock, ArrowLeft, QrCode, CheckCircle } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useCart } from '../context/CartContext';
-import { getMenu, createOrder, getPublicSettings, getNetworkInfo } from '../lib/api';
+import { getMenu, createOrder, getPublicSettings, getNetworkInfo, getPublicOrder } from '../lib/api';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishImage from '../components/DishImage';
 import Dropdown from '../components/Dropdown';
@@ -36,6 +36,7 @@ export default function MenuPage() {
   const [selectedTable, setSelectedTable] = useState(1);
   const [qrOrigin, setQrOrigin] = useState(window.location.origin);
   const [tableQr, setTableQr] = useState('');
+  const [lastOrder, setLastOrder] = useState(null);
 
   // Get table number from URL
   useEffect(() => {
@@ -81,7 +82,21 @@ export default function MenuPage() {
     }).then(setTableQr).catch(() => setTableQr(''));
   }, [qrOrigin, selectedTable]);
 
+  useEffect(() => {
+    if (!lastOrder?.id || !tableNumber) return;
+
+    const refresh = () => {
+      getPublicOrder(lastOrder.id, tableNumber)
+        .then(setLastOrder)
+        .catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
+  }, [lastOrder?.id, tableNumber]);
+
   const filteredDishes = dishes.filter(d => {
+    if (d.visible === false) return false;
     if (selectedCategory !== 'all' && d.category !== selectedCategory) return false;
     if (searchTerm && !d.name.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filters.veg && !d.veg) return false;
@@ -102,11 +117,12 @@ export default function MenuPage() {
     }
     setSubmitting(true);
     try {
-      await createOrder({
+      const order = await createOrder({
         table: tableNumber,
         items: cart.map(i => ({ dishId: i.id, name: i.name, quantity: i.qty, price: i.price })),
         notes: orderNotes,
       });
+      setLastOrder(order);
       clearCart();
       setOrderNotes('');
       setShowCart(false);
@@ -206,6 +222,36 @@ export default function MenuPage() {
       </div>
 
       <div className="px-4 py-4">
+        {lastOrder && (
+          <div className="mb-4 rounded-xl p-4 shadow-md" style={{ background: 'white' }}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm" style={{ color: colors.textLight }}>Commande #{lastOrder.id}</p>
+                <h2 className="font-bold text-lg" style={{ color: colors.text }}>Suivi de votre commande</h2>
+              </div>
+              <button onClick={() => setLastOrder(null)} className="p-1"><X size={18} style={{ color: colors.textLight }} /></button>
+            </div>
+            <div className="grid grid-cols-4 gap-2 mt-3">
+              {[
+                { key: 'pending', label: 'Recue' },
+                { key: 'preparing', label: 'Preparation' },
+                { key: 'ready', label: 'Prete' },
+                { key: 'served', label: 'Servie' },
+              ].map((step, index, steps) => {
+                const orderIndex = steps.findIndex(s => s.key === lastOrder.status);
+                const active = lastOrder.status === 'cancelled' ? false : index <= orderIndex;
+                return (
+                  <div key={step.key} className="rounded-lg px-2 py-2 text-center text-xs font-medium" style={{ background: active ? colors.primary : colors.sand, color: active ? colors.cream : colors.textLight }}>
+                    {active && <CheckCircle size={14} className="mx-auto mb-1" />}
+                    {step.label}
+                  </div>
+                );
+              })}
+            </div>
+            {lastOrder.status === 'cancelled' && <p className="text-sm mt-3" style={{ color: colors.primary }}>Commande annulee. Contactez le personnel.</p>}
+          </div>
+        )}
+
         {/* Search & Filters */}
         <div className="mb-4 space-y-3">
           <div className="relative">
