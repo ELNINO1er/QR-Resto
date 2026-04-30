@@ -54,6 +54,7 @@ export const deleteUser = (id) =>
 
 // Settings
 export const getPublicSettings = () => request('/settings/public');
+export const getNetworkInfo = () => request('/settings/network');
 export const getSettings = () => request('/settings');
 export const updateSettings = (data) =>
   request('/settings', { method: 'PATCH', body: JSON.stringify(data) });

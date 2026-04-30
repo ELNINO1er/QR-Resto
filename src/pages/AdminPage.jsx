@@ -15,7 +15,7 @@ import {
   updateDish, deleteDish as apiDeleteDish, getStats, getSettings,
   updateSettings as apiUpdateSettings, updatePayment, getUsers, createUser,
   updateUser, deleteUser as apiDeleteUser, changePassword, getReports,
-  exportOrdersUrl
+  exportOrdersUrl, getNetworkInfo
 } from '../lib/api';
 import { connectWs, onWsMessage, disconnectWs } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
@@ -45,6 +45,7 @@ export default function AdminPage() {
   });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [qrOrigin, setQrOrigin] = useState(window.location.origin);
 
   // Load data
   const loadData = useCallback(async () => {
@@ -58,6 +59,10 @@ export default function AdminPage() {
       setSettingsState(settingsData);
       getReports(reportPeriod).then(setReports).catch(() => {});
       if (user?.role === 'admin') getUsers().then(setUsers).catch(() => {});
+      getNetworkInfo().then(info => {
+        const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+        setQrOrigin(isLocalhost && info.origin ? info.origin : window.location.origin);
+      }).catch(() => {});
     } catch (err) {
       showNotif('Erreur de chargement', 'warning');
     }
@@ -208,7 +213,7 @@ export default function AdminPage() {
       <html><head><title>QR Tables</title>
       <style>body{font-family:Arial;padding:20px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.card{text-align:center;border:1px solid #ddd;padding:14px;break-inside:avoid}img{width:170px;height:170px}</style>
       </head><body><div class="grid">
-      ${Array.from({ length: tablesCount }, (_, i) => i + 1).map(num => `<div class="card"><img src="${qrCodes[num] || ''}"><h2>Table ${num}</h2><p>${baseMenuUrl}?table=${num}</p></div>`).join('')}
+      ${Array.from({ length: tablesCount }, (_, i) => i + 1).map(num => `<div class="card"><img src="${qrCodes[num] || ''}"><h2>Table ${num}</h2><p>${tableQrUrl(num)}</p></div>`).join('')}
       </div></body></html>
     `);
     win.document.close();
@@ -250,7 +255,7 @@ export default function AdminPage() {
   ];
 
   const tablesCount = parseInt(settings.tables_count) || 12;
-  const baseMenuUrl = `${window.location.origin}/menu`;
+  const tableQrUrl = useCallback((table) => `${qrOrigin}/t/${table}`, [qrOrigin]);
 
   useEffect(() => {
     if (adminTab !== 'tables') return;
@@ -260,7 +265,7 @@ export default function AdminPage() {
       const entries = await Promise.all(
         Array.from({ length: tablesCount }, async (_, i) => {
           const table = i + 1;
-          const url = `${baseMenuUrl}?table=${table}`;
+          const url = tableQrUrl(table);
           const dataUrl = await QRCode.toDataURL(url, {
             margin: 1,
             width: 220,
@@ -274,7 +279,7 @@ export default function AdminPage() {
 
     generateQrCodes().catch(() => showNotif('Erreur de generation QR', 'warning'));
     return () => { cancelled = true; };
-  }, [adminTab, tablesCount, baseMenuUrl, showNotif]);
+  }, [adminTab, tablesCount, tableQrUrl, showNotif]);
 
   return (
     <div className="min-h-screen" style={{ background: colors.sand }}>
@@ -675,7 +680,7 @@ export default function AdminPage() {
               <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Tables & QR Codes</h2>
               <p style={{ color: colors.textLight }}>Generez les QR codes pour chaque table</p>
               <p className="text-sm mt-2 px-3 py-2 rounded-lg inline-block" style={{ background: 'white', color: colors.primary }}>
-                URL type: {baseMenuUrl}?table=N
+                QR client: {qrOrigin}/t/N
               </p>
               <button onClick={printQrSheet} className="ml-3 px-4 py-2 rounded-lg font-medium inline-flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
                 <Printer size={18} /> Imprimer la feuille
@@ -692,7 +697,7 @@ export default function AdminPage() {
                     )}
                   </div>
                   <h3 className="font-bold mb-1" style={{ color: colors.text }}>Table {num}</h3>
-                  <p className="text-xs mb-3" style={{ color: colors.textLight }}>/menu?table={num}</p>
+                  <p className="text-xs mb-3 break-all" style={{ color: colors.textLight }}>{tableQrUrl(num)}</p>
                   <button className="w-full py-2 rounded-lg text-xs font-medium" style={{ background: colors.primary, color: colors.cream }}>Imprimer</button>
                 </div>
               ))}
