@@ -62,6 +62,7 @@ test('order creation recalculates price and name from the database', async () =>
     body: JSON.stringify({
       table: 1,
       items: [{ dishId: dish.id, name: 'Fake item', quantity: 2, price: 1 }],
+      cashAmount: dish.price * 2 + 500,
     }),
   });
 
@@ -69,6 +70,10 @@ test('order creation recalculates price and name from the database', async () =>
   assert.equal(body.total, dish.price * 2);
   assert.equal(body.items[0].name, dish.name);
   assert.equal(body.items[0].price, dish.price);
+  assert.equal(body.paymentStatus, 'unpaid');
+  assert.equal(body.paymentMethod, 'cash');
+  assert.equal(body.amountPaid, dish.price * 2 + 500);
+  assert.equal(body.changeDue, 500);
   createdOrder = body;
   createdDishId = dish.id;
   createdQuantity = 2;
@@ -113,6 +118,61 @@ test('admin stats are computed from real orders', async () => {
   assert.ok(Array.isArray(body.topDishes));
   assert.ok(Array.isArray(body.peakHours));
   assert.equal(body.topDishes[0].name, 'Bissap Glace');
+});
+
+test('cash payment calculates change and rejects short payments', async () => {
+  assert.ok(token);
+  assert.ok(createdOrder);
+
+  const shortPayment = await request(`/orders/${createdOrder.id}/payment`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ paymentStatus: 'paid', paymentMethod: 'cash', amountPaid: createdOrder.total - 100 }),
+  });
+  assert.equal(shortPayment.res.status, 400);
+
+  const { res, body } = await request(`/orders/${createdOrder.id}/payment`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ paymentStatus: 'paid', paymentMethod: 'cash' }),
+  });
+
+  assert.equal(res.status, 200);
+  assert.equal(body.paymentStatus, 'paid');
+  assert.equal(body.paymentMethod, 'cash');
+  assert.equal(body.amountPaid, createdOrder.total + 500);
+  assert.equal(body.changeDue, 500);
+});
+
+test('order cannot be served before payment is confirmed', async () => {
+  assert.ok(token);
+  const dish = queryOne("SELECT * FROM dishes WHERE name = 'Jus de Gingembre'");
+
+  const created = await request('/orders', {
+    method: 'POST',
+    body: JSON.stringify({
+      table: 3,
+      items: [{ dishId: dish.id, quantity: 1 }],
+      cashAmount: dish.price,
+    }),
+  });
+  assert.equal(created.res.status, 201);
+
+  const ready = await request(`/orders/${created.body.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status: 'ready' }),
+  });
+  assert.equal(ready.res.status, 200);
+
+  const served = await request(`/orders/${created.body.id}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ status: 'served' }),
+  });
+
+  assert.equal(served.res.status, 409);
+  assert.match(served.body.error, /Paiement non confirme/);
 });
 
 test('cancelling an order restores dish stock', async () => {

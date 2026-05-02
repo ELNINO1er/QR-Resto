@@ -58,6 +58,8 @@ export async function initDb() {
       status TEXT NOT NULL DEFAULT 'pending',
       payment_status TEXT NOT NULL DEFAULT 'unpaid',
       payment_method TEXT DEFAULT '',
+      amount_paid INTEGER DEFAULT 0,
+      change_due INTEGER DEFAULT 0,
       paid_at DATETIME,
       notes TEXT DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -84,6 +86,8 @@ export async function initDb() {
   migrateColumn('users', 'default_password_changed', 'INTEGER DEFAULT 0');
   migrateColumn('orders', 'payment_status', "TEXT NOT NULL DEFAULT 'unpaid'");
   migrateColumn('orders', 'payment_method', "TEXT DEFAULT ''");
+  migrateColumn('orders', 'amount_paid', 'INTEGER DEFAULT 0');
+  migrateColumn('orders', 'change_due', 'INTEGER DEFAULT 0');
   migrateColumn('orders', 'paid_at', 'DATETIME');
   migrateColumn('dishes', 'visible', 'INTEGER DEFAULT 1');
 

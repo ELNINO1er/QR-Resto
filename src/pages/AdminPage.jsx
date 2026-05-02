@@ -173,12 +173,12 @@ export default function AdminPage() {
     } catch { showNotif('Erreur', 'warning'); }
   };
 
-  const handleUpdatePayment = async (order, paymentStatus, paymentMethod = order.paymentMethod || '') => {
+  const handleUpdatePayment = async (order, paymentStatus, paymentMethod = order.paymentMethod || '', amountPaid) => {
     try {
-      const updated = await updatePayment(order.id, paymentStatus, paymentMethod);
+      const updated = await updatePayment(order.id, paymentStatus, paymentMethod, amountPaid);
       setOrders(prev => prev.map(o => o.id === order.id ? updated : o));
       showNotif('Paiement mis a jour');
-    } catch { showNotif('Erreur paiement', 'warning'); }
+    } catch (err) { showNotif(err.message || 'Erreur paiement', 'warning'); }
   };
 
   const handleCreateUser = async () => {
@@ -414,7 +414,14 @@ export default function AdminPage() {
                           <button onClick={() => handleUpdateStatus(order.id, 'ready')} className="col-span-2 py-2 rounded-lg text-sm font-medium" style={{ background: colors.primary, color: colors.cream }}>Marquer prete</button>
                         )}
                         {order.status === 'ready' && (
-                          <button onClick={() => handleUpdateStatus(order.id, 'served')} className="col-span-2 py-2 rounded-lg text-sm font-medium" style={{ background: colors.primary, color: colors.cream }}>Servie</button>
+                          <button
+                            onClick={() => handleUpdateStatus(order.id, 'served')}
+                            disabled={order.paymentStatus !== 'paid'}
+                            className="col-span-2 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                            style={{ background: colors.primary, color: colors.cream }}
+                          >
+                            {order.paymentStatus === 'paid' ? 'Servie' : 'Paiement requis'}
+                          </button>
                         )}
                         {!['served', 'cancelled'].includes(order.status) && (
                           <button onClick={() => handleUpdateStatus(order.id, 'cancelled')} className="col-span-2 py-2 rounded-lg text-sm font-medium" style={{ background: '#EFD9D9', color: colors.primary }}>Annuler la commande</button>
@@ -436,7 +443,7 @@ export default function AdminPage() {
           <div>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Paiements</h2>
-              <p style={{ color: colors.textLight }}>Suivi mobile money, especes et cartes</p>
+              <p style={{ color: colors.textLight }}>Encaissement espece et calcul automatique de la monnaie</p>
             </div>
             <div className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white' }}>
               <table className="w-full">
@@ -445,38 +452,37 @@ export default function AdminPage() {
                     <th className="text-left px-4 py-3 text-sm">Commande</th>
                     <th className="text-left px-4 py-3 text-sm">Total</th>
                     <th className="text-left px-4 py-3 text-sm">Statut</th>
-                    <th className="text-left px-4 py-3 text-sm">Methode</th>
+                    <th className="text-left px-4 py-3 text-sm">Recu</th>
+                    <th className="text-left px-4 py-3 text-sm">Monnaie</th>
                     <th className="text-left px-4 py-3 text-sm">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {orders.map(order => (
+                  {orders.map(order => {
+                    const amount = order.amountPaid || 0;
+                    const numericAmount = Number(amount) || 0;
+                    const changeDue = Math.max(0, numericAmount - order.total);
+                    const canPay = numericAmount >= order.total;
+                    return (
                     <tr key={order.id} className="border-t" style={{ borderColor: colors.sand }}>
                       <td className="px-4 py-3 font-medium">#{order.id} · Table {order.table}</td>
                       <td className="px-4 py-3">{order.total.toLocaleString()} FCFA</td>
                       <td className="px-4 py-3">{order.paymentStatus === 'paid' ? 'Paye' : order.paymentStatus === 'refunded' ? 'Rembourse' : 'Non paye'}</td>
                       <td className="px-4 py-3">
-                        <Dropdown
-                          value={order.paymentMethod || ''}
-                          onChange={method => handleUpdatePayment(order, order.paymentStatus || 'unpaid', method)}
-                          options={[
-                            { value: '', label: 'Aucune' },
-                            { value: 'cash', label: 'Especes' },
-                            { value: 'mobile_money', label: 'Mobile money' },
-                            { value: 'card', label: 'Carte' },
-                          ]}
-                          className="min-w-40"
-                          buttonStyle={{ minHeight: 38, paddingTop: 7, paddingBottom: 7 }}
-                        />
+                        {numericAmount.toLocaleString()} FCFA
+                      </td>
+                      <td className="px-4 py-3 font-bold" style={{ color: canPay ? '#5C8A4A' : colors.primary }}>
+                        {canPay ? changeDue.toLocaleString() : 'Insuffisant'} FCFA
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          <button onClick={() => handleUpdatePayment(order, 'paid', order.paymentMethod || 'cash')} className="px-3 py-1 rounded text-sm" style={{ background: colors.primary, color: colors.cream }}>Paye</button>
+                          <button onClick={() => handleUpdatePayment(order, 'paid', 'cash', numericAmount)} disabled={!canPay || order.paymentStatus === 'paid'} className="px-3 py-1 rounded text-sm disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>Confirmer recu</button>
                           <button onClick={() => handleUpdatePayment(order, 'unpaid', '')} className="px-3 py-1 rounded text-sm" style={{ background: colors.sand, color: colors.text }}>Annuler</button>
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

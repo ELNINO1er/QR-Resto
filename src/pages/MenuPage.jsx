@@ -31,6 +31,7 @@ export default function MenuPage() {
   const [filters, setFilters] = useState({ veg: false, glutenFree: false, spicy: false });
   const [showCart, setShowCart] = useState(false);
   const [orderNotes, setOrderNotes] = useState('');
+  const [cashAmount, setCashAmount] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [selectedTable, setSelectedTable] = useState(1);
@@ -115,16 +116,23 @@ export default function MenuPage() {
       showNotif('Numero de table manquant', 'warning');
       return;
     }
+    const declaredCash = Number(cashAmount);
+    if (!Number.isInteger(declaredCash) || declaredCash < cartTotal) {
+      showNotif('Indiquez le montant en especes disponible', 'warning');
+      return;
+    }
     setSubmitting(true);
     try {
       const order = await createOrder({
         table: tableNumber,
         items: cart.map(i => ({ dishId: i.id, name: i.name, quantity: i.qty, price: i.price })),
         notes: orderNotes,
+        cashAmount: declaredCash,
       });
       setLastOrder(order);
       clearCart();
       setOrderNotes('');
+      setCashAmount('');
       setShowCart(false);
       showNotif('Commande envoyee avec succes !');
     } catch {
@@ -247,6 +255,9 @@ export default function MenuPage() {
                   </div>
                 );
               })}
+            </div>
+            <div className="mt-3 rounded-lg px-3 py-2 text-sm" style={{ background: colors.sand, color: colors.text }}>
+              Especes annoncees: {Number(lastOrder.amountPaid || 0).toLocaleString()} FCFA. Monnaie prevue: {Number(lastOrder.changeDue || 0).toLocaleString()} FCFA.
             </div>
             {lastOrder.status === 'cancelled' && <p className="text-sm mt-3" style={{ color: colors.primary }}>Commande annulee. Contactez le personnel.</p>}
           </div>
@@ -372,6 +383,23 @@ export default function MenuPage() {
                 <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Notes speciales</label>
                 <textarea value={orderNotes} onChange={e => setOrderNotes(e.target.value)} placeholder="Sans oignons, bien cuit, allergies..." className="w-full px-3 py-2 rounded-lg border-2 focus:outline-none text-sm" style={{ borderColor: colors.sandDark, background: 'white' }} rows="2" />
               </div>
+              <div className="rounded-xl p-3" style={{ background: 'white' }}>
+                <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Je paie en especes avec</label>
+                <input
+                  type="number"
+                  value={cashAmount}
+                  onChange={e => setCashAmount(e.target.value)}
+                  placeholder={`${cartTotal.toLocaleString()} FCFA ou plus`}
+                  className="w-full px-3 py-3 rounded-lg border-2 focus:outline-none"
+                  style={{ borderColor: Number(cashAmount) >= cartTotal ? colors.sandDark : colors.primary, background: colors.cream }}
+                />
+                <div className="flex justify-between text-sm mt-2">
+                  <span style={{ color: colors.textLight }}>Monnaie preparee par la caisse</span>
+                  <strong style={{ color: Number(cashAmount) >= cartTotal ? '#5C8A4A' : colors.primary }}>
+                    {Number(cashAmount) >= cartTotal ? `${(Number(cashAmount) - cartTotal).toLocaleString()} FCFA` : 'Montant insuffisant'}
+                  </strong>
+                </div>
+              </div>
               <div className="border-t-2 pt-4 mt-4" style={{ borderColor: colors.sandDark }}>
                 <div className="flex justify-between mb-2">
                   <span style={{ color: colors.textLight }}>Sous-total</span>
@@ -381,7 +409,7 @@ export default function MenuPage() {
                   <span style={{ color: colors.text }}>Total</span>
                   <span style={{ color: colors.primary }}>{cartTotal.toLocaleString()} FCFA</span>
                 </div>
-                <button onClick={submitOrder} disabled={submitting} className="w-full py-4 rounded-xl font-bold text-lg disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>
+                <button onClick={submitOrder} disabled={submitting || Number(cashAmount) < cartTotal} className="w-full py-4 rounded-xl font-bold text-lg disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>
                   {submitting ? 'Envoi en cours...' : 'Confirmer la commande'}
                 </button>
               </div>

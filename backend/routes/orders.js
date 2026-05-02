@@ -23,6 +23,8 @@ function formatOrder(o, items) {
     status: o.status,
     paymentStatus: o.payment_status,
     paymentMethod: o.payment_method,
+    amountPaid: o.amount_paid || 0,
+    changeDue: o.change_due || 0,
     paidAt: o.paid_at,
     notes: o.notes,
     time: o.created_at ? new Date(o.created_at + 'Z').toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '',
@@ -111,7 +113,7 @@ function restoreStock(orderId) {
 
 // Public: create order
 router.post('/', (req, res) => {
-  const { table, items, notes } = req.body;
+  const { table, items, notes, cashAmount } = req.body;
   let validated;
   try {
     validated = validateOrder(table, items);
@@ -119,9 +121,17 @@ router.post('/', (req, res) => {
     return res.status(error.status || 400).json({ error: error.message });
   }
 
+  const declaredCash = Number(cashAmount);
+  if (!Number.isInteger(declaredCash) || declaredCash < validated.total) {
+    return res.status(400).json({ error: 'Montant espece requis ou insuffisant' });
+  }
+  const expectedChange = declaredCash - validated.total;
+
   const orderId = transaction(() => {
-    runNoSave('INSERT INTO orders (table_number, total, status, notes) VALUES (?, ?, ?, ?)',
-      [validated.tableNumber, validated.total, 'pending', notes || '']);
+    runNoSave(
+      'INSERT INTO orders (table_number, total, status, payment_method, amount_paid, change_due, notes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [validated.tableNumber, validated.total, 'pending', 'cash', declaredCash, expectedChange, notes || '']
+    );
 
     // Get the last inserted order id
     const row = queryOne('SELECT last_insert_rowid() as id');
@@ -158,6 +168,8 @@ router.get('/:id/public', (req, res) => {
     total: order.total,
     status: order.status,
     paymentStatus: order.paymentStatus,
+    amountPaid: order.amountPaid,
+    changeDue: order.changeDue,
     time: order.time,
     items: order.items,
   });
@@ -197,6 +209,9 @@ router.patch('/:id', authMiddleware, requireRoles('admin', 'serveur', 'cuisine')
   if (existing.status === 'served' && status === 'cancelled') {
     return res.status(409).json({ error: 'Commande deja servie' });
   }
+  if (status === 'served' && existing.payment_status !== 'paid') {
+    return res.status(409).json({ error: 'Paiement non confirme' });
+  }
 
   transaction(() => {
     if (status === 'cancelled' && existing.status !== 'cancelled') restoreStock(req.params.id);
@@ -217,12 +232,31 @@ router.patch('/:id/payment', authMiddleware, requireRoles('admin', 'serveur', 'c
     return res.status(400).json({ error: 'Paiement invalide' });
   }
 
+  const existing = queryOne('SELECT * FROM orders WHERE id = ?', [req.params.id]);
+  if (!existing) return res.status(404).json({ error: 'Commande introuvable' });
+
+  let amountPaid = 0;
+  let changeDue = 0;
+  if (paymentStatus === 'paid') {
+    if (paymentMethod === 'cash') {
+      amountPaid = req.body.amountPaid == null ? Number(existing.amount_paid) : Number(req.body.amountPaid);
+      if (!Number.isInteger(amountPaid) || amountPaid < existing.total) {
+        return res.status(400).json({ error: 'Montant recu insuffisant' });
+      }
+      changeDue = amountPaid - existing.total;
+    } else {
+      amountPaid = existing.total;
+    }
+  } else if (paymentStatus === 'unpaid') {
+    amountPaid = existing.amount_paid || 0;
+    changeDue = existing.change_due || 0;
+  }
+
   const paidAt = paymentStatus === 'paid' ? new Date().toISOString() : null;
   const result = run(
-    'UPDATE orders SET payment_status = ?, payment_method = ?, paid_at = ? WHERE id = ?',
-    [paymentStatus, paymentMethod || '', paidAt, req.params.id]
+    'UPDATE orders SET payment_status = ?, payment_method = ?, amount_paid = ?, change_due = ?, paid_at = ? WHERE id = ?',
+    [paymentStatus, paymentMethod || '', amountPaid, changeDue, paidAt, req.params.id]
   );
-  if (result.changes === 0) return res.status(404).json({ error: 'Commande introuvable' });
 
   const order = getOrderById(req.params.id);
   broadcast({ type: 'ORDER_UPDATED', order });
@@ -304,13 +338,13 @@ router.get('/export.csv', authMiddleware, requireRoles('admin', 'caisse'), (req,
   const from = req.query.from || '1970-01-01';
   const to = req.query.to || new Date().toISOString().split('T')[0];
   const rows = queryAll(
-    `SELECT id, table_number, total, status, payment_status, payment_method, notes, created_at, paid_at
+    `SELECT id, table_number, total, status, payment_status, payment_method, amount_paid, change_due, notes, created_at, paid_at
      FROM orders
      WHERE date(created_at) BETWEEN date(?) AND date(?)
      ORDER BY created_at DESC`,
     [from, to]
   );
-  const header = ['id', 'table', 'total', 'status', 'payment_status', 'payment_method', 'notes', 'created_at', 'paid_at'];
+  const header = ['id', 'table', 'total', 'status', 'payment_status', 'payment_method', 'amount_paid', 'change_due', 'notes', 'created_at', 'paid_at'];
   const csv = [
     header.join(','),
     ...rows.map(row => [
@@ -320,6 +354,8 @@ router.get('/export.csv', authMiddleware, requireRoles('admin', 'caisse'), (req,
       row.status,
       row.payment_status,
       row.payment_method,
+      row.amount_paid || 0,
+      row.change_due || 0,
       `"${String(row.notes || '').replaceAll('"', '""')}"`,
       row.created_at,
       row.paid_at || '',

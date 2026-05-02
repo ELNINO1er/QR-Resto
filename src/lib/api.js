@@ -38,8 +38,8 @@ export const getPublicOrder = (id, table) => request(`/orders/${id}/public?table
 export const getOrders = () => request('/orders');
 export const updateOrderStatus = (id, status) =>
   request(`/orders/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
-export const updatePayment = (id, paymentStatus, paymentMethod) =>
-  request(`/orders/${id}/payment`, { method: 'PATCH', body: JSON.stringify({ paymentStatus, paymentMethod }) });
+export const updatePayment = (id, paymentStatus, paymentMethod, amountPaid) =>
+  request(`/orders/${id}/payment`, { method: 'PATCH', body: JSON.stringify({ paymentStatus, paymentMethod, amountPaid }) });
 export const getStats = () => request('/orders/stats');
 export const getReports = (period = 'day') => request(`/orders/reports?period=${period}`);
 export const exportOrdersUrl = (from, to) => `/api/orders/export.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;

@@ -6,7 +6,6 @@ import { useAuth } from '../context/AuthContext';
 import { getOrders, updateOrderStatus, updatePayment } from '../lib/api';
 import { connectWs, disconnectWs, onWsMessage } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
-import Dropdown from '../components/Dropdown';
 
 export default function ServerPage() {
   const navigate = useNavigate();
@@ -48,13 +47,13 @@ export default function ServerPage() {
     }
   };
 
-  const setPaid = async (order, method) => {
+  const confirmCash = async (order) => {
     try {
-      const updated = await updatePayment(order.id, 'paid', method);
+      const updated = await updatePayment(order.id, 'paid', 'cash', order.amountPaid || order.total);
       setOrders(prev => prev.map(o => o.id === order.id ? updated : o));
-      showNotif(`Paiement #${order.id} valide`);
-    } catch {
-      showNotif('Erreur paiement', 'warning');
+      showNotif(`Argent confirme pour #${order.id}`);
+    } catch (err) {
+      showNotif(err.message || 'Erreur paiement', 'warning');
     }
   };
 
@@ -90,7 +89,7 @@ export default function ServerPage() {
           <h2 className="text-xl font-bold mb-3" style={{ color: colors.text }}>A servir maintenant</h2>
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {readyOrders.map(order => (
-              <OrderCard key={order.id} order={order} onPaid={setPaid} onServed={setServed} highlight />
+              <OrderCard key={order.id} order={order} onPaid={confirmCash} onServed={setServed} highlight />
             ))}
             {readyOrders.length === 0 && <p style={{ color: colors.textLight }}>Aucune commande prete.</p>}
           </div>
@@ -100,7 +99,7 @@ export default function ServerPage() {
           <h2 className="text-xl font-bold mb-3" style={{ color: colors.text }}>En preparation</h2>
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {activeOrders.map(order => (
-              <OrderCard key={order.id} order={order} onPaid={setPaid} />
+              <OrderCard key={order.id} order={order} onPaid={confirmCash} />
             ))}
           </div>
         </section>
@@ -111,6 +110,8 @@ export default function ServerPage() {
 
 function OrderCard({ order, onPaid, onServed, highlight = false }) {
   const statusLabel = order.status === 'pending' ? 'Recue' : order.status === 'preparing' ? 'Preparation' : 'Prete';
+  const declaredCash = Number(order.amountPaid || order.total);
+  const changeDue = Number(order.changeDue || Math.max(0, declaredCash - order.total));
 
   return (
     <section className="rounded-2xl p-5 shadow-md" style={{ background: 'white', border: highlight ? `2px solid #5C8A4A` : 'none' }}>
@@ -136,26 +137,25 @@ function OrderCard({ order, onPaid, onServed, highlight = false }) {
       <div className="flex items-center justify-between border-t pt-3 mb-3" style={{ borderColor: colors.sand }}>
         <strong style={{ color: colors.primary }}>{order.total.toLocaleString()} FCFA</strong>
         <span className="text-sm" style={{ color: order.paymentStatus === 'paid' ? '#5C8A4A' : colors.textLight }}>
-          {order.paymentStatus === 'paid' ? 'Paye' : 'Non paye'}
+          {order.paymentStatus === 'paid' ? 'Argent recu' : 'A confirmer'}
         </span>
       </div>
 
+      <div className="rounded-lg px-3 py-2 mb-3 text-sm" style={{ background: order.paymentStatus === 'paid' ? '#5C8A4A20' : colors.sand, color: order.paymentStatus === 'paid' ? '#315C25' : colors.text }}>
+        Client a {declaredCash.toLocaleString()} FCFA - Monnaie a remettre {changeDue.toLocaleString()} FCFA
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
-        <Dropdown
-          value={order.paymentMethod || 'cash'}
-          onChange={method => onPaid(order, method)}
-          options={[
-            { value: 'cash', label: 'Especes' },
-            { value: 'mobile_money', label: 'Mobile money' },
-            { value: 'card', label: 'Carte' },
-          ]}
-          buttonStyle={{ minHeight: 42 }}
-        />
-        <button onClick={() => onPaid(order, order.paymentMethod || 'cash')} className="py-2 rounded-lg font-medium flex items-center justify-center gap-2" style={{ background: colors.sand, color: colors.text }}>
-          <CreditCard size={17} /> Encaisser
+        <button
+          onClick={() => onPaid(order)}
+          disabled={order.paymentStatus === 'paid'}
+          className="col-span-2 py-2 rounded-lg font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+          style={{ background: colors.sand, color: colors.text }}
+        >
+          <CreditCard size={17} /> Confirmer argent recu
         </button>
         {onServed && (
-          <button onClick={() => onServed(order)} className="col-span-2 py-3 rounded-lg font-bold flex items-center justify-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
+          <button onClick={() => onServed(order)} disabled={order.paymentStatus !== 'paid'} className="col-span-2 py-3 rounded-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>
             <CheckCircle size={18} /> Marquer servie
           </button>
         )}
