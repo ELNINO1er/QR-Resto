@@ -13,6 +13,9 @@ export default function KitchenPage() {
   const { notification, showNotif } = useNotification();
   const [orders, setOrders] = useState([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const refreshActiveOrders = useCallback(() => (
+    getOrders().then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
+  ), []);
 
   const playSound = useCallback(() => {
     if (!soundEnabled) return;
@@ -30,17 +33,29 @@ export default function KitchenPage() {
     osc.stop(ctx.currentTime + 0.45);
   }, [soundEnabled]);
 
+  // Fix 11: Remove showNotif from deps (it's stable via useCallback with [])
   useEffect(() => {
-    getOrders()
-      .then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
+    refreshActiveOrders()
       .catch(() => showNotif('Erreur de chargement', 'warning'));
-  }, [showNotif]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshActiveOrders]);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refreshActiveOrders().catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [refreshActiveOrders]);
+
+  // Fix 10: Ignore WS echo for actions initiated locally by tracking pending updates
   useEffect(() => {
     connectWs();
     const unsub = onWsMessage(data => {
       if (data.type === 'NEW_ORDER') {
-        setOrders(prev => [data.order, ...prev]);
+        setOrders(prev => {
+          if (prev.some(o => o.id === data.order.id)) return prev;
+          return [data.order, ...prev];
+        });
         playSound();
         showNotif(`Nouvelle commande table ${data.order.table}`);
       }
@@ -49,15 +64,15 @@ export default function KitchenPage() {
           if (['served', 'cancelled'].includes(data.order.status)) {
             return prev.filter(o => o.id !== data.order.id);
           }
-          const next = prev.some(o => o.id === data.order.id)
+          return prev.some(o => o.id === data.order.id)
             ? prev.map(o => o.id === data.order.id ? data.order : o)
             : [data.order, ...prev];
-          return next;
         });
       }
     });
     return () => { unsub(); disconnectWs(); };
-  }, [playSound, showNotif]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playSound]);
 
   const setStatus = async (order, status) => {
     try {

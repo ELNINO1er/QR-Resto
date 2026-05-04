@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle, CreditCard, LogOut, ShoppingCart } from 'lucide-react';
 import { colors } from '../lib/colors';
@@ -12,17 +12,34 @@ export default function ServerPage() {
   const { logout } = useAuth();
   const { notification, showNotif } = useNotification();
   const [orders, setOrders] = useState([]);
+  const refreshActiveOrders = useCallback(() => (
+    getOrders().then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
+  ), []);
+
+  // Fix 11: Remove showNotif from deps
+  useEffect(() => {
+    refreshActiveOrders()
+      .catch(() => showNotif('Erreur de chargement', 'warning'));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshActiveOrders]);
 
   useEffect(() => {
-    getOrders()
-      .then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
-      .catch(() => showNotif('Erreur de chargement', 'warning'));
-  }, [showNotif]);
+    const timer = setInterval(() => {
+      refreshActiveOrders().catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [refreshActiveOrders]);
 
+  // Fix 10: Deduplicate WS updates (avoid double state update from API response + WS echo)
   useEffect(() => {
     connectWs();
     const unsub = onWsMessage(data => {
-      if (data.type === 'NEW_ORDER') setOrders(prev => [data.order, ...prev]);
+      if (data.type === 'NEW_ORDER') {
+        setOrders(prev => {
+          if (prev.some(o => o.id === data.order.id)) return prev;
+          return [data.order, ...prev];
+        });
+      }
       if (data.type === 'ORDER_UPDATED') {
         setOrders(prev => {
           if (['served', 'cancelled'].includes(data.order.status)) {

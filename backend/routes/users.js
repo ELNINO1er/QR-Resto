@@ -5,10 +5,26 @@ import { authMiddleware, adminOnly } from '../middleware/auth.js';
 
 const router = Router();
 const roles = ['admin', 'serveur', 'cuisine', 'caisse'];
+const superAdminRoles = ['superadmin', ...roles];
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function cleanUserInput(body, existing = {}, actorRole = 'admin') {
+  const allowedRoles = actorRole === 'superadmin' ? superAdminRoles : roles;
+  const email = String(body.email ?? existing.email ?? '').trim().toLowerCase();
+  const name = String(body.name ?? existing.name ?? '').trim();
+  const role = body.role ?? existing.role;
+
+  if (!emailPattern.test(email)) throw new Error('Email invalide');
+  if (name.length < 2 || name.length > 80) throw new Error('Nom invalide');
+  if (!allowedRoles.includes(role)) throw new Error('Role invalide');
+
+  return { email, name, role };
+}
 
 function formatUser(user) {
   return {
     id: user.id,
+    restaurantId: user.restaurant_id || 1,
     email: user.email,
     name: user.name,
     role: user.role,
@@ -19,59 +35,78 @@ function formatUser(user) {
 
 router.use(authMiddleware, adminOnly);
 
-router.get('/', (_req, res) => {
-  const users = queryAll('SELECT id, email, name, role, default_password_changed, created_at FROM users ORDER BY created_at DESC');
+router.get('/', async (req, res) => {
+  const users = req.user.role === 'superadmin'
+    ? await queryAll('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users ORDER BY created_at DESC')
+    : await queryAll('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users WHERE restaurant_id = ? ORDER BY created_at DESC', [req.user.restaurantId || 1]);
   res.json(users.map(formatUser));
 });
 
-router.post('/', (req, res) => {
-  const { email, name, role, password } = req.body;
-  if (!email || !name || !roles.includes(role) || !password || password.length < 8) {
+router.post('/', async (req, res) => {
+  let clean;
+  try {
+    clean = cleanUserInput(req.body, {}, req.user.role);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const { password } = req.body;
+  if (!password || password.length < 8) {
     return res.status(400).json({ error: 'Email, nom, role et mot de passe de 8 caracteres requis' });
   }
 
-  const existing = queryOne('SELECT id FROM users WHERE email = ?', [email]);
+  const existing = await queryOne('SELECT id FROM users WHERE email = ?', [clean.email]);
   if (existing) return res.status(409).json({ error: 'Email deja utilise' });
 
+  const restaurantId = req.user.role === 'superadmin'
+    ? Number(req.body.restaurantId || req.user.restaurantId || 1)
+    : (req.user.restaurantId || 1);
   const hash = bcrypt.hashSync(password, 10);
-  const result = run(
-    'INSERT INTO users (email, password, role, name, default_password_changed) VALUES (?, ?, ?, ?, ?)',
-    [email, hash, role, name, 0]
+  const result = await run(
+    'INSERT INTO users (restaurant_id, email, password, role, name, default_password_changed) VALUES (?, ?, ?, ?, ?, ?)',
+    [restaurantId, clean.email, hash, clean.role, clean.name, 0]
   );
-  const user = queryOne('SELECT id, email, name, role, default_password_changed, created_at FROM users WHERE id = ?', [result.lastInsertRowid]);
+  const user = await queryOne('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users WHERE id = ?', [result.lastInsertRowid]);
   res.status(201).json(formatUser(user));
 });
 
-router.patch('/:id', (req, res) => {
-  const user = queryOne('SELECT * FROM users WHERE id = ?', [req.params.id]);
+router.patch('/:id', async (req, res) => {
+  const user = req.user.role === 'superadmin'
+    ? await queryOne('SELECT * FROM users WHERE id = ?', [req.params.id])
+    : await queryOne('SELECT * FROM users WHERE id = ? AND restaurant_id = ?', [req.params.id, req.user.restaurantId || 1]);
   if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
 
-  const role = req.body.role ?? user.role;
-  if (!roles.includes(role)) return res.status(400).json({ error: 'Role invalide' });
+  let clean;
+  try {
+    clean = cleanUserInput(req.body, user, req.user.role);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
 
   if (req.body.password) {
     if (req.body.password.length < 8) return res.status(400).json({ error: 'Mot de passe trop court' });
     const hash = bcrypt.hashSync(req.body.password, 10);
-    run(
+    await run(
       'UPDATE users SET email = ?, name = ?, role = ?, password = ?, default_password_changed = 0 WHERE id = ?',
-      [req.body.email ?? user.email, req.body.name ?? user.name, role, hash, req.params.id]
+      [clean.email, clean.name, clean.role, hash, req.params.id]
     );
   } else {
-    run(
+    await run(
       'UPDATE users SET email = ?, name = ?, role = ? WHERE id = ?',
-      [req.body.email ?? user.email, req.body.name ?? user.name, role, req.params.id]
+      [clean.email, clean.name, clean.role, req.params.id]
     );
   }
 
-  const updated = queryOne('SELECT id, email, name, role, default_password_changed, created_at FROM users WHERE id = ?', [req.params.id]);
+  const updated = await queryOne('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users WHERE id = ?', [req.params.id]);
   res.json(formatUser(updated));
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   if (Number(req.params.id) === req.user.id) {
     return res.status(400).json({ error: 'Impossible de supprimer votre propre compte' });
   }
-  const result = run('DELETE FROM users WHERE id = ?', [req.params.id]);
+  const result = req.user.role === 'superadmin'
+    ? await run('DELETE FROM users WHERE id = ?', [req.params.id])
+    : await run('DELETE FROM users WHERE id = ? AND restaurant_id = ?', [req.params.id, req.user.restaurantId || 1]);
   if (result.changes === 0) return res.status(404).json({ error: 'Utilisateur introuvable' });
   res.json({ success: true });
 });

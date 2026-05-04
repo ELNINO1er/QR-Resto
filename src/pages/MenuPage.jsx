@@ -116,18 +116,14 @@ export default function MenuPage() {
       showNotif('Numero de table manquant', 'warning');
       return;
     }
-    const declaredCash = Number(cashAmount);
-    if (!Number.isInteger(declaredCash) || declaredCash < cartTotal) {
-      showNotif('Indiquez le montant en especes disponible', 'warning');
-      return;
-    }
+    const declaredCash = cashAmount !== '' ? Math.floor(Number(cashAmount)) : null;
     setSubmitting(true);
     try {
       const order = await createOrder({
         table: tableNumber,
         items: cart.map(i => ({ dishId: i.id, name: i.name, quantity: i.qty, price: i.price })),
         notes: orderNotes,
-        cashAmount: declaredCash,
+        ...(declaredCash != null ? { cashAmount: declaredCash } : {}),
       });
       setLastOrder(order);
       clearCart();
@@ -409,7 +405,7 @@ export default function MenuPage() {
                   <span style={{ color: colors.text }}>Total</span>
                   <span style={{ color: colors.primary }}>{cartTotal.toLocaleString()} FCFA</span>
                 </div>
-                <button onClick={submitOrder} disabled={submitting || Number(cashAmount) < cartTotal} className="w-full py-4 rounded-xl font-bold text-lg disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>
+                <button onClick={submitOrder} disabled={submitting} className="w-full py-4 rounded-xl font-bold text-lg disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>
                   {submitting ? 'Envoi en cours...' : 'Confirmer la commande'}
                 </button>
               </div>

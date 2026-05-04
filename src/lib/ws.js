@@ -1,30 +1,44 @@
 let socket = null;
 let listeners = new Set();
 let reconnectTimer = null;
+let manuallyClosed = false;
 
+// Fix 7: No longer send token in URL query string (leaked in logs).
+// Auth is done via first message after connection.
 function getWsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const token = localStorage.getItem('token');
-  const query = token ? `?token=${encodeURIComponent(token)}` : '';
-  return `${proto}//${window.location.host}/ws${query}`;
+  return `${proto}//${window.location.host}/ws`;
 }
 
 export function connectWs() {
-  if (socket?.readyState === WebSocket.OPEN) return;
+  const token = localStorage.getItem('token');
+  if (!token) return;
+  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
 
   try {
+    manuallyClosed = false;
+    clearTimeout(reconnectTimer);
     socket = new WebSocket(getWsUrl());
+
+    socket.onopen = () => {
+      const currentToken = localStorage.getItem('token');
+      if (currentToken) socket.send(JSON.stringify({ type: 'auth', token: currentToken }));
+    };
 
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'AUTH_OK') return;
         for (const listener of listeners) listener(data);
       } catch {}
     };
 
     socket.onclose = () => {
+      socket = null;
       clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(connectWs, 3000);
+      if (!manuallyClosed && listeners.size > 0) {
+        reconnectTimer = setTimeout(connectWs, 3000);
+      }
     };
 
     socket.onerror = () => {
@@ -39,6 +53,7 @@ export function onWsMessage(callback) {
 }
 
 export function disconnectWs() {
+  manuallyClosed = true;
   clearTimeout(reconnectTimer);
   socket?.close();
   socket = null;

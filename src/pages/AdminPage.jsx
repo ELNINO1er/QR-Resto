@@ -15,7 +15,8 @@ import {
   updateDish, deleteDish as apiDeleteDish, getStats, getSettings,
   updateSettings as apiUpdateSettings, updatePayment, getUsers, createUser,
   updateUser, deleteUser as apiDeleteUser, changePassword, getReports,
-  exportOrdersUrl, getNetworkInfo
+  exportOrdersCsv, getNetworkInfo, getRestaurants, createRestaurant,
+  updateRestaurant, getBackups, createBackup, restoreBackup, exportDatabaseUrl
 } from '../lib/api';
 import { connectWs, onWsMessage, disconnectWs } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
@@ -38,6 +39,9 @@ export default function AdminPage() {
   const [qrCodes, setQrCodes] = useState({});
   const [users, setUsers] = useState([]);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'serveur', password: '' });
+  const [restaurants, setRestaurants] = useState([]);
+  const [newRestaurant, setNewRestaurant] = useState({ name: '', slug: '' });
+  const [backups, setBackups] = useState([]);
   const [reports, setReports] = useState({ sales: [], topDishes: [] });
   const [reportPeriod, setReportPeriod] = useState('day');
   const [exportRange, setExportRange] = useState({
@@ -52,12 +56,12 @@ export default function AdminPage() {
   const loadData = useCallback(async () => {
     try {
       const role = user?.role || 'admin';
-      const canSeeStats = ['admin', 'caisse'].includes(role);
-      const canSeeSettings = role === 'admin';
+      const canSeeStats = ['superadmin', 'admin', 'caisse'].includes(role);
+      const canSeeSettings = ['superadmin', 'admin'].includes(role);
 
       const [ordersData, menuData, statsData, settingsData] = await Promise.all([
         getOrders(),
-        getMenu(),
+        getMenu(true),
         canSeeStats ? getStats() : Promise.resolve({ todayRevenue: 0, todayOrders: 0, avgOrder: 0, lowStock: 0, topDishes: [], peakHours: [] }),
         canSeeSettings ? getSettings() : Promise.resolve({}),
       ]);
@@ -67,7 +71,11 @@ export default function AdminPage() {
       setSettingsState(settingsData);
       if (canSeeStats) getReports(reportPeriod).then(setReports).catch(() => {});
       else setReports({ sales: [], topDishes: [] });
-      if (user?.role === 'admin') getUsers().then(setUsers).catch(() => {});
+      if (['superadmin', 'admin'].includes(user?.role)) getUsers().then(setUsers).catch(() => {});
+      if (user?.role === 'superadmin') {
+        getRestaurants().then(setRestaurants).catch(() => {});
+        getBackups().then(setBackups).catch(() => {});
+      }
       getNetworkInfo().then(info => {
         const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
         setQrOrigin(isLocalhost && info.origin ? info.origin : window.location.origin);
@@ -80,11 +88,21 @@ export default function AdminPage() {
   useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
+    const timer = setInterval(() => {
+      getOrders()
+        .then(setOrders)
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (user?.mustChangePassword) {
       setAdminTab('security');
       showNotif('Changez le mot de passe par defaut', 'warning');
     }
-  }, [user?.mustChangePassword, showNotif]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.mustChangePassword]);
 
   const playNewOrderSound = useCallback(() => {
     if (!soundEnabled) return;
@@ -103,12 +121,15 @@ export default function AdminPage() {
     osc.stop(ctx.currentTime + 0.35);
   }, [soundEnabled]);
 
-  // WebSocket for real-time
+  // Fix 10+11: Deduplicate WS updates + remove showNotif from deps
   useEffect(() => {
     connectWs();
     const unsub = onWsMessage((data) => {
       if (data.type === 'NEW_ORDER') {
-        setOrders(prev => [data.order, ...prev]);
+        setOrders(prev => {
+          if (prev.some(o => o.id === data.order.id)) return prev;
+          return [data.order, ...prev];
+        });
         playNewOrderSound();
         showNotif(`Nouvelle commande #${data.order.id} - Table ${data.order.table}`);
       }
@@ -117,7 +138,8 @@ export default function AdminPage() {
       }
     });
     return () => { unsub(); disconnectWs(); };
-  }, [playNewOrderSound, showNotif]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playNewOrderSound]);
 
   const handleUpdateStatus = async (orderId, newStatus) => {
     try {
@@ -190,6 +212,60 @@ export default function AdminPage() {
     } catch (err) { showNotif(err.message || 'Erreur utilisateur', 'warning'); }
   };
 
+  const handleCreateRestaurant = async () => {
+    try {
+      const created = await createRestaurant(newRestaurant);
+      setRestaurants(prev => [created, ...prev]);
+      setNewRestaurant({ name: '', slug: '' });
+      showNotif('Restaurant cree');
+    } catch (err) { showNotif(err.message || 'Erreur restaurant', 'warning'); }
+  };
+
+  const handleToggleRestaurant = async (restaurant) => {
+    try {
+      const updated = await updateRestaurant(restaurant.id, {
+        name: restaurant.name,
+        status: restaurant.status === 'active' ? 'suspended' : 'active',
+      });
+      setRestaurants(prev => prev.map(r => r.id === restaurant.id ? updated : r));
+    } catch (err) { showNotif(err.message || 'Erreur restaurant', 'warning'); }
+  };
+
+  const handleCreateBackup = async () => {
+    try {
+      await createBackup();
+      setBackups(await getBackups());
+      showNotif('Sauvegarde creee');
+    } catch (err) { showNotif(err.message || 'Erreur sauvegarde', 'warning'); }
+  };
+
+  const handleRestoreBackup = async (backupName) => {
+    try {
+      await restoreBackup(backupName);
+      showNotif('Sauvegarde restauree');
+      loadData();
+    } catch (err) { showNotif(err.message || 'Erreur restauration', 'warning'); }
+  };
+
+  const downloadDatabase = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(exportDatabaseUrl(), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error('Export impossible');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `resto-backup-${new Date().toISOString().split('T')[0]}.db`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { showNotif('Erreur export base', 'warning'); }
+  };
+
   const handleChangePassword = async () => {
     try {
       await changePassword(passwordForm.currentPassword, passwordForm.newPassword);
@@ -231,18 +307,7 @@ export default function AdminPage() {
 
   const downloadExport = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(exportOrdersUrl(exportRange.from, exportRange.to), {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error('Export impossible');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `orders-${exportRange.from}-${exportRange.to}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await exportOrdersCsv(exportRange.from, exportRange.to);
     } catch {
       showNotif('Erreur export CSV', 'warning');
     }
@@ -258,9 +323,11 @@ export default function AdminPage() {
     { id: 'history', icon: History, label: 'Historique', roles: ['admin', 'caisse'] },
     { id: 'stats', icon: BarChart3, label: 'Statistiques', roles: ['admin', 'caisse'] },
     { id: 'tables', icon: QrCode, label: 'Tables & QR', roles: ['admin'] },
-    { id: 'users', icon: Users, label: 'Utilisateurs', roles: ['admin'] },
-    { id: 'settings', icon: Settings, label: 'Parametres', roles: ['admin'] },
-    { id: 'security', icon: KeyRound, label: 'Securite', roles: ['admin'] },
+    { id: 'users', icon: Users, label: 'Utilisateurs', roles: ['superadmin', 'admin'] },
+    { id: 'restaurants', icon: Home, label: 'Restaurants', roles: ['superadmin'] },
+    { id: 'maintenance', icon: Download, label: 'Maintenance', roles: ['superadmin'] },
+    { id: 'settings', icon: Settings, label: 'Parametres', roles: ['superadmin', 'admin'] },
+    { id: 'security', icon: KeyRound, label: 'Securite', roles: ['superadmin', 'admin'] },
   ].filter(item => item.roles.includes(user?.role || 'admin')), [orders, user?.role]);
 
   useEffect(() => {
@@ -743,7 +810,7 @@ export default function AdminPage() {
         )}
 
         {/* ===== USERS ===== */}
-        {adminTab === 'users' && user?.role === 'admin' && (
+        {adminTab === 'users' && ['superadmin', 'admin'].includes(user?.role) && (
           <div>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Utilisateurs & roles</h2>
@@ -757,6 +824,7 @@ export default function AdminPage() {
                   value={newUser.role}
                   onChange={role => setNewUser({ ...newUser, role })}
                   options={[
+                    ...(user?.role === 'superadmin' ? [{ value: 'superadmin', label: 'Super Admin' }] : []),
                     { value: 'serveur', label: 'Serveur' },
                     { value: 'cuisine', label: 'Cuisine' },
                     { value: 'caisse', label: 'Caisse' },
@@ -792,6 +860,88 @@ export default function AdminPage() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ===== RESTAURANTS ===== */}
+        {adminTab === 'restaurants' && user?.role === 'superadmin' && (
+          <div>
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Restaurants</h2>
+              <p style={{ color: colors.textLight }}>Creation et controle des espaces restaurants</p>
+            </div>
+            <div className="rounded-2xl p-4 shadow-md mb-4" style={{ background: 'white' }}>
+              <div className="grid md:grid-cols-3 gap-3">
+                <input placeholder="Nom du restaurant" value={newRestaurant.name} onChange={e => setNewRestaurant({ ...newRestaurant, name: e.target.value })} className="px-3 py-2 rounded-lg border" />
+                <input placeholder="Slug optionnel" value={newRestaurant.slug} onChange={e => setNewRestaurant({ ...newRestaurant, slug: e.target.value })} className="px-3 py-2 rounded-lg border" />
+                <button onClick={handleCreateRestaurant} className="rounded-lg font-medium" style={{ background: colors.primary, color: colors.cream }}>Creer</button>
+              </div>
+            </div>
+            <div className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white' }}>
+              <table className="w-full">
+                <thead style={{ background: colors.sand }}>
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm">Nom</th>
+                    <th className="text-left px-4 py-3 text-sm">Slug</th>
+                    <th className="text-left px-4 py-3 text-sm">Statut</th>
+                    <th className="text-left px-4 py-3 text-sm">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {restaurants.map(r => (
+                    <tr key={r.id} className="border-t" style={{ borderColor: colors.sand }}>
+                      <td className="px-4 py-3">{r.name}</td>
+                      <td className="px-4 py-3">{r.slug}</td>
+                      <td className="px-4 py-3">{r.status === 'active' ? 'Actif' : 'Suspendu'}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => handleToggleRestaurant(r)} className="px-3 py-1 rounded text-sm" style={{ background: colors.sand, color: colors.text }}>
+                          {r.status === 'active' ? 'Suspendre' : 'Activer'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ===== MAINTENANCE ===== */}
+        {adminTab === 'maintenance' && user?.role === 'superadmin' && (
+          <div>
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Maintenance</h2>
+              <p style={{ color: colors.textLight }}>Sauvegarde, export et restauration de l'installation</p>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <button onClick={handleCreateBackup} className="px-4 py-2 rounded-lg font-medium" style={{ background: colors.primary, color: colors.cream }}>Creer une sauvegarde</button>
+              <button onClick={downloadDatabase} className="px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.sand, color: colors.text }}>
+                <Download size={18} /> Exporter la base
+              </button>
+            </div>
+            <div className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white' }}>
+              <table className="w-full">
+                <thead style={{ background: colors.sand }}>
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm">Sauvegarde</th>
+                    <th className="text-left px-4 py-3 text-sm">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backups.map(backup => (
+                    <tr key={backup.name} className="border-t" style={{ borderColor: colors.sand }}>
+                      <td className="px-4 py-3">{backup.name}</td>
+                      <td className="px-4 py-3">
+                        <button onClick={() => handleRestoreBackup(backup.name)} className="px-3 py-1 rounded text-sm" style={{ background: '#EFD9D9', color: colors.primary }}>Restaurer</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {backups.length === 0 && (
+                    <tr><td className="px-4 py-6" colSpan="2" style={{ color: colors.textLight }}>Aucune sauvegarde disponible.</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>

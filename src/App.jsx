@@ -13,7 +13,7 @@ function TableRedirect() {
   return <Navigate to={`/menu?table=${table}`} replace />;
 }
 
-function ProtectedRoute({ children }) {
+function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -28,6 +28,7 @@ function ProtectedRoute({ children }) {
   }
 
   if (!user) return <Navigate to="/login" replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to="/admin" replace />;
   return children;
 }
 
@@ -40,8 +41,8 @@ function AppRoutes() {
       <Route path="/t/:table" element={<TableRedirect />} />
       <Route path="/login" element={user ? <Navigate to="/admin" replace /> : <LoginPage />} />
       <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-      <Route path="/kitchen" element={<ProtectedRoute><KitchenPage /></ProtectedRoute>} />
-      <Route path="/server" element={<ProtectedRoute><ServerPage /></ProtectedRoute>} />
+      <Route path="/kitchen" element={<ProtectedRoute roles={['admin', 'cuisine']}><KitchenPage /></ProtectedRoute>} />
+      <Route path="/server" element={<ProtectedRoute roles={['admin', 'serveur']}><ServerPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/menu" replace />} />
     </Routes>
   );
