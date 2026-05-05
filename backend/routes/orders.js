@@ -261,6 +261,7 @@ router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), async (req
 });
 
 router.get('/reports', authMiddleware, requireRoles('admin', 'caisse'), async (req, res) => {
+  const scope = scopeForUser(req);
   const period = ['day', 'week', 'month'].includes(req.query.period) ? req.query.period : 'day';
   const format = period === 'day' ? '%Y-%m-%d' : period === 'week' ? '%Y-W%W' : '%Y-%m';
   const mysqlFormat = period === 'day' ? '%Y-%m-%d' : period === 'week' ? '%x-W%v' : '%Y-%m';
