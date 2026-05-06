@@ -22,7 +22,8 @@ export function connectWs() {
 
     socket.onopen = () => {
       const currentToken = localStorage.getItem('token');
-      if (currentToken) socket.send(JSON.stringify({ type: 'auth', token: currentToken }));
+      const restaurantId = localStorage.getItem('activeRestaurantId');
+      if (currentToken) socket.send(JSON.stringify({ type: 'auth', token: currentToken, restaurantId }));
     };
 
     socket.onmessage = (event) => {

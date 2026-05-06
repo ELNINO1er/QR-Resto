@@ -126,8 +126,10 @@ export async function initDb() {
   `);
   db.run(`
     CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
+      restaurant_id INTEGER DEFAULT 1,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (restaurant_id, key)
     )
   `);
 
@@ -141,6 +143,7 @@ export async function initDb() {
   migrateColumn('orders', 'change_due', 'INTEGER DEFAULT 0');
   migrateColumn('orders', 'paid_at', 'DATETIME');
   migrateColumn('dishes', 'visible', 'INTEGER DEFAULT 1');
+  migrateSettingsTable();
 
   // Seed data
   const restaurantCount = queryOne('SELECT COUNT(*) as count FROM restaurants').count;
@@ -181,7 +184,7 @@ export async function initDb() {
     }
   }
 
-  const settingsCount = queryOne('SELECT COUNT(*) as count FROM settings').count;
+  const settingsCount = queryOne('SELECT COUNT(*) as count FROM settings WHERE restaurant_id = ?', [DEFAULT_RESTAURANT_ID]).count;
   if (settingsCount === 0) {
     const defaults = [
       ['restaurant_name', 'Le Bistrot Royal'],
@@ -191,16 +194,22 @@ export async function initDb() {
       ['tables_count', '12'],
       ['qr_base_url', process.env.QR_BASE_URL || ''],
       ['timezone', process.env.APP_TIME_ZONE || 'Africa/Abidjan'],
+      ['receipt_thank_you', 'Merci pour votre visite et a bientot.'],
     ];
     for (const [key, value] of defaults) {
-      run('INSERT INTO settings (key, value) VALUES (?, ?)', [key, value]);
+      run('INSERT INTO settings (restaurant_id, key, value) VALUES (?, ?, ?)', [DEFAULT_RESTAURANT_ID, key, value]);
     }
   }
 
-  const bissapPatch = queryOne("SELECT value FROM settings WHERE key = 'migration_bissap_stock_v1'");
+  const bissapPatch = queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND key = 'migration_bissap_stock_v1'", [DEFAULT_RESTAURANT_ID]);
   if (!bissapPatch) {
     run("UPDATE dishes SET stock = 20, available = 1, image = '🥤' WHERE name = 'Bissap Glace' AND stock = 0");
-    run("INSERT INTO settings (key, value) VALUES ('migration_bissap_stock_v1', 'done')");
+    run("INSERT INTO settings (restaurant_id, key, value) VALUES (?, 'migration_bissap_stock_v1', 'done')", [DEFAULT_RESTAURANT_ID]);
+  }
+
+  const restaurantsForSettings = queryAll('SELECT id, name FROM restaurants');
+  for (const restaurant of restaurantsForSettings) {
+    await seedRestaurantSettings(restaurant.id, restaurant.name);
   }
 
   save();
@@ -223,6 +232,39 @@ async function seedMysql() {
     await run('INSERT INTO users (restaurant_id, email, password, role, name) VALUES (?, ?, ?, ?, ?)',
       [DEFAULT_RESTAURANT_ID, 'superadmin@resto.ci', hash, 'superadmin', 'Super Administrateur']);
   }
+
+  const settingsCount = (await queryOne('SELECT COUNT(*) as count FROM settings WHERE restaurant_id = ?', [DEFAULT_RESTAURANT_ID])).count;
+  if (settingsCount === 0) {
+    await seedRestaurantSettings(DEFAULT_RESTAURANT_ID, 'Le Bistrot Royal');
+  }
+
+  const restaurants = await queryAll('SELECT id, name FROM restaurants');
+  for (const restaurant of restaurants) {
+    await seedRestaurantSettings(restaurant.id, restaurant.name);
+  }
+}
+
+async function seedRestaurantSettings(restaurantId, restaurantName) {
+  const defaults = [
+    ['restaurant_name', restaurantName || 'Restaurant'],
+    ['address', ''],
+    ['phone', ''],
+    ['currency', 'FCFA'],
+    ['tables_count', '12'],
+    ['qr_base_url', process.env.QR_BASE_URL || ''],
+    ['timezone', process.env.APP_TIME_ZONE || 'Africa/Abidjan'],
+    ['receipt_thank_you', 'Merci pour votre visite et a bientot.'],
+  ];
+  for (const [key, value] of defaults) {
+    if (isMysql()) {
+      await run('INSERT IGNORE INTO settings (restaurant_id, `key`, value) VALUES (?, ?, ?)', [restaurantId, key, value]);
+    } else {
+      run(
+        'INSERT INTO settings (restaurant_id, key, value) VALUES (?, ?, ?) ON CONFLICT(restaurant_id, key) DO NOTHING',
+        [restaurantId, key, value]
+      );
+    }
+  }
 }
 
 function migrateColumn(table, column, definition) {
@@ -230,6 +272,26 @@ function migrateColumn(table, column, definition) {
   if (!columns.some(c => c.name === column)) {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+}
+
+function migrateSettingsTable() {
+  const columns = queryAll('PRAGMA table_info(settings)');
+  if (columns.some(c => c.name === 'restaurant_id')) return;
+
+  const rows = queryAll('SELECT key, value FROM settings');
+  db.run('ALTER TABLE settings RENAME TO settings_legacy');
+  db.run(`
+    CREATE TABLE settings (
+      restaurant_id INTEGER DEFAULT 1,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (restaurant_id, key)
+    )
+  `);
+  for (const row of rows) {
+    db.run('INSERT INTO settings (restaurant_id, key, value) VALUES (?, ?, ?)', [DEFAULT_RESTAURANT_ID, row.key, row.value]);
+  }
+  db.run('DROP TABLE settings_legacy');
 }
 
 // Helper: save database to file
@@ -309,11 +371,7 @@ function mysqlConnection() {
 function normalizeMysqlSql(sql) {
   return sql
     .replace(/COALESCE\(visible, 1\)/g, 'COALESCE(visible, 1)')
-    .replace(/date\(/gi, 'DATE(')
-    .replace(/WHERE key IN/g, 'WHERE restaurant_id = 1 AND `key` IN')
-    .replace(/WHERE key =/g, 'WHERE restaurant_id = 1 AND `key` =')
-    .replace(/SELECT \* FROM settings$/i, 'SELECT `key`, value FROM settings WHERE restaurant_id = 1')
-    .replace(/SELECT \* FROM settings WHERE/i, 'SELECT `key`, value FROM settings WHERE');
+    .replace(/date\(/gi, 'DATE(');
 }
 
 async function queryAllMysql(sql, params = []) {

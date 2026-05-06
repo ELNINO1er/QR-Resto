@@ -109,7 +109,9 @@ server.on('upgrade', (req, socket, head) => {
   let authenticated = false;
   if (legacyToken) {
     try {
-      verifyToken(legacyToken);
+      const payload = verifyToken(legacyToken);
+      ws._restaurantId = payload.restaurantId || 1;
+      ws._role = payload.role;
       authenticated = true;
     } catch {
       // Will require first-message auth
@@ -140,8 +142,12 @@ wss.on('connection', (ws) => {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'auth' && msg.token) {
-        verifyToken(msg.token);
+        const payload = verifyToken(msg.token);
         ws._authenticated = true;
+        ws._role = payload.role;
+        ws._restaurantId = payload.role === 'superadmin'
+          ? Number(msg.restaurantId || payload.restaurantId || 1)
+          : (payload.restaurantId || 1);
         clearTimeout(authTimeout);
         clients.add(ws);
         console.log(`[WS] Client authenticated (${clients.size} total)`);
@@ -166,8 +172,10 @@ wss.on('connection', (ws) => {
 
 setBroadcast((data) => {
   const msg = JSON.stringify(data);
+  const restaurantId = data.order?.restaurantId;
   for (const c of clients) {
-    if (c.readyState === 1) c.send(msg);
+    if (c.readyState !== 1) continue;
+    if (!restaurantId || c._restaurantId === restaurantId) c.send(msg);
   }
 });
 

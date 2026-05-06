@@ -9,6 +9,15 @@ import { NotificationBanner, useNotification } from '../components/Notification'
 import DishImage from '../components/DishImage';
 import Dropdown from '../components/Dropdown';
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 const categories = [
   { id: 'all', name: 'Tout', icon: '🍽️' },
   { id: 'entrees', name: 'Entrees', icon: '🥗' },
@@ -21,9 +30,11 @@ export default function MenuPage() {
   const [searchParams] = useSearchParams();
   const { cart, tableNumber, setTableNumber, addToCart, updateQty, cartTotal, cartCount, clearCart } = useCart();
   const { notification, showNotif } = useNotification();
+  const restaurantId = searchParams.get('restaurantId') || '1';
 
   const [dishes, setDishes] = useState([]);
   const [restaurantName, setRestaurantName] = useState('Resto QR');
+  const [publicSettings, setPublicSettings] = useState({});
   const [tablesCount, setTablesCount] = useState(12);
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -55,33 +66,34 @@ export default function MenuPage() {
 
   // Load menu + settings
   useEffect(() => {
-    Promise.all([getMenu(), getPublicSettings()])
+    Promise.all([getMenu(false, restaurantId), getPublicSettings(restaurantId)])
       .then(([menuData, settings]) => {
         setDishes(menuData);
+        setPublicSettings(settings);
         if (settings.restaurant_name) setRestaurantName(settings.restaurant_name);
         if (settings.tables_count) setTablesCount(parseInt(settings.tables_count));
       })
       .catch(() => showNotif('Erreur de chargement du menu', 'warning'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
-    getNetworkInfo()
+    getNetworkInfo(restaurantId)
       .then(info => {
         const isLocalhost = ['localhost', '127.0.0.1'].includes(window.location.hostname);
         setQrOrigin(isLocalhost && info.origin ? info.origin : window.location.origin);
       })
       .catch(() => {});
-  }, []);
+  }, [restaurantId]);
 
   useEffect(() => {
-    const url = `${qrOrigin}/t/${selectedTable}`;
+    const url = `${qrOrigin}/t/${selectedTable}?restaurantId=${restaurantId}`;
     QRCode.toDataURL(url, {
       margin: 1,
       width: 220,
       color: { dark: colors.primaryDark, light: '#FFFFFF' },
     }).then(setTableQr).catch(() => setTableQr(''));
-  }, [qrOrigin, selectedTable]);
+  }, [qrOrigin, restaurantId, selectedTable]);
 
   useEffect(() => {
     if (!lastOrder?.id || !tableNumber) return;
@@ -123,6 +135,7 @@ export default function MenuPage() {
         table: tableNumber,
         items: cart.map(i => ({ dishId: i.id, name: i.name, quantity: i.qty, price: i.price })),
         notes: orderNotes,
+        restaurantId,
         ...(declaredCash != null ? { cashAmount: declaredCash } : {}),
       });
       setLastOrder(order);
@@ -136,6 +149,33 @@ export default function MenuPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const printReceipt = (order) => {
+    const win = window.open('', '_blank', 'width=420,height=640');
+    if (!win) return;
+    const currency = publicSettings.currency || 'FCFA';
+    const thankYou = publicSettings.receipt_thank_you || 'Merci pour votre visite et a bientot.';
+    const paidLabel = order.paymentStatus === 'paid' ? 'Paye' : order.paymentStatus === 'refunded' ? 'Rembourse' : 'Non paye';
+    win.document.write(`
+      <html><head><title>Facture ${order.id}</title>
+      <style>body{font-family:Arial;padding:18px;color:#111}.center{text-align:center} h1{font-size:22px;margin:0 0 4px}.muted{color:#555;font-size:12px}.row{display:flex;justify-content:space-between;gap:12px;margin:6px 0}.total{font-weight:bold;border-top:1px solid #000;padding-top:8px;margin-top:8px}.thanks{border-top:1px dashed #999;margin-top:14px;padding-top:10px;text-align:center;font-size:13px}</style>
+      </head><body>
+      <div class="center">
+        <h1>${escapeHtml(restaurantName)}</h1>
+        ${publicSettings.address ? `<div class="muted">${escapeHtml(publicSettings.address)}</div>` : ''}
+        ${publicSettings.phone ? `<div class="muted">${escapeHtml(publicSettings.phone)}</div>` : ''}
+      </div>
+      <p><strong>Facture #${order.id}</strong><br><span class="muted">Table ${order.table} - ${escapeHtml(order.time || '')} - ${paidLabel}</span></p>
+      ${order.items.map(i => `<div class="row"><span>${i.qty}x ${escapeHtml(i.name)}</span><span>${(i.qty * i.price).toLocaleString()} ${currency}</span></div>`).join('')}
+      <div class="row total"><span>Total</span><span>${order.total.toLocaleString()} ${currency}</span></div>
+      <div class="row"><span>Recu</span><span>${Number(order.amountPaid || 0).toLocaleString()} ${currency}</span></div>
+      <div class="row"><span>Monnaie</span><span>${Number(order.changeDue || 0).toLocaleString()} ${currency}</span></div>
+      <div class="thanks">${escapeHtml(thankYou)}</div>
+      </body></html>
+    `);
+    win.document.close();
+    win.print();
   };
 
   if (loading) {
@@ -174,7 +214,7 @@ export default function MenuPage() {
                 </div>
               </div>
             </div>
-            <p className="text-sm" style={{ color: colors.textLight }}>Adresse QR exemple: {qrOrigin}/t/{selectedTable}</p>
+            <p className="text-sm" style={{ color: colors.textLight }}>Adresse QR exemple: {qrOrigin}/t/{selectedTable}?restaurantId={restaurantId}</p>
           </section>
 
           <section className="rounded-2xl p-6 shadow-2xl" style={{ background: colors.cream }}>
@@ -199,7 +239,7 @@ export default function MenuPage() {
               <div className="w-56 h-56 mx-auto rounded-xl flex items-center justify-center" style={{ background: colors.sand }}>
                 {tableQr ? <img src={tableQr} alt={`QR table ${selectedTable}`} className="w-52 h-52 object-contain rounded-lg" /> : <QrCode size={96} style={{ color: colors.primary }} />}
               </div>
-              <p className="text-xs mt-3 break-all" style={{ color: colors.textLight }}>{qrOrigin}/t/{selectedTable}</p>
+              <p className="text-xs mt-3 break-all" style={{ color: colors.textLight }}>{qrOrigin}/t/{selectedTable}?restaurantId={restaurantId}</p>
             </div>
           </section>
         </div>
@@ -255,6 +295,11 @@ export default function MenuPage() {
             <div className="mt-3 rounded-lg px-3 py-2 text-sm" style={{ background: colors.sand, color: colors.text }}>
               Especes annoncees: {Number(lastOrder.amountPaid || 0).toLocaleString()} FCFA. Monnaie prevue: {Number(lastOrder.changeDue || 0).toLocaleString()} FCFA.
             </div>
+            {lastOrder.paymentStatus === 'paid' && (
+              <button onClick={() => printReceipt(lastOrder)} className="mt-3 w-full py-3 rounded-lg font-bold" style={{ background: colors.primary, color: colors.cream }}>
+                Imprimer la facture
+              </button>
+            )}
             {lastOrder.status === 'cancelled' && <p className="text-sm mt-3" style={{ color: colors.primary }}>Commande annulee. Contactez le personnel.</p>}
           </div>
         )}

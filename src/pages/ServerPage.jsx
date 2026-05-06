@@ -1,17 +1,27 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, CreditCard, LogOut, ShoppingCart } from 'lucide-react';
+import { CheckCircle, CreditCard, LogOut, Printer, ShoppingCart } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useAuth } from '../context/AuthContext';
-import { getOrders, updateOrderStatus, updatePayment } from '../lib/api';
+import { getOrders, getPublicSettings, updateOrderStatus, updatePayment } from '../lib/api';
 import { connectWs, disconnectWs, onWsMessage } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 export default function ServerPage() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const { notification, showNotif } = useNotification();
   const [orders, setOrders] = useState([]);
+  const [settings, setSettings] = useState({});
   const refreshActiveOrders = useCallback(() => (
     getOrders().then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
   ), []);
@@ -29,6 +39,12 @@ export default function ServerPage() {
     }, 5000);
     return () => clearInterval(timer);
   }, [refreshActiveOrders]);
+
+  useEffect(() => {
+    getPublicSettings(user?.restaurantId || 1)
+      .then(setSettings)
+      .catch(() => {});
+  }, [user?.restaurantId]);
 
   // Fix 10: Deduplicate WS updates (avoid double state update from API response + WS echo)
   useEffect(() => {
@@ -106,7 +122,7 @@ export default function ServerPage() {
           <h2 className="text-xl font-bold mb-3" style={{ color: colors.text }}>A servir maintenant</h2>
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {readyOrders.map(order => (
-              <OrderCard key={order.id} order={order} onPaid={confirmCash} onServed={setServed} highlight />
+              <OrderCard key={order.id} order={order} settings={settings} onPaid={confirmCash} onServed={setServed} highlight />
             ))}
             {readyOrders.length === 0 && <p style={{ color: colors.textLight }}>Aucune commande prete.</p>}
           </div>
@@ -116,7 +132,7 @@ export default function ServerPage() {
           <h2 className="text-xl font-bold mb-3" style={{ color: colors.text }}>En preparation</h2>
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
             {activeOrders.map(order => (
-              <OrderCard key={order.id} order={order} onPaid={confirmCash} />
+              <OrderCard key={order.id} order={order} settings={settings} onPaid={confirmCash} />
             ))}
           </div>
         </section>
@@ -125,10 +141,38 @@ export default function ServerPage() {
   );
 }
 
-function OrderCard({ order, onPaid, onServed, highlight = false }) {
+function OrderCard({ order, settings, onPaid, onServed, highlight = false }) {
   const statusLabel = order.status === 'pending' ? 'Recue' : order.status === 'preparing' ? 'Preparation' : 'Prete';
   const declaredCash = Number(order.amountPaid || order.total);
   const changeDue = Number(order.changeDue || Math.max(0, declaredCash - order.total));
+  const currency = settings.currency || 'FCFA';
+
+  const printReceipt = () => {
+    const win = window.open('', '_blank', 'width=420,height=640');
+    if (!win) return;
+    const restaurantName = settings.restaurant_name || 'Resto QR';
+    const thankYou = settings.receipt_thank_you || 'Merci pour votre visite et a bientot.';
+    const paidLabel = order.paymentStatus === 'paid' ? 'Paye' : order.paymentStatus === 'refunded' ? 'Rembourse' : 'Non paye';
+    win.document.write(`
+      <html><head><title>Facture ${order.id}</title>
+      <style>body{font-family:Arial;padding:18px;color:#111}.center{text-align:center} h1{font-size:22px;margin:0 0 4px}.muted{color:#555;font-size:12px}.row{display:flex;justify-content:space-between;gap:12px;margin:6px 0}.total{font-weight:bold;border-top:1px solid #000;padding-top:8px;margin-top:8px}.thanks{border-top:1px dashed #999;margin-top:14px;padding-top:10px;text-align:center;font-size:13px}</style>
+      </head><body>
+      <div class="center">
+        <h1>${escapeHtml(restaurantName)}</h1>
+        ${settings.address ? `<div class="muted">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings.phone ? `<div class="muted">${escapeHtml(settings.phone)}</div>` : ''}
+      </div>
+      <p><strong>Facture #${order.id}</strong><br><span class="muted">Table ${order.table} - ${escapeHtml(order.time || '')} - ${paidLabel}</span></p>
+      ${order.items.map(i => `<div class="row"><span>${i.qty}x ${escapeHtml(i.name)}</span><span>${(i.qty * i.price).toLocaleString()} ${currency}</span></div>`).join('')}
+      <div class="row total"><span>Total</span><span>${order.total.toLocaleString()} ${currency}</span></div>
+      <div class="row"><span>Recu</span><span>${declaredCash.toLocaleString()} ${currency}</span></div>
+      <div class="row"><span>Monnaie</span><span>${changeDue.toLocaleString()} ${currency}</span></div>
+      <div class="thanks">${escapeHtml(thankYou)}</div>
+      </body></html>
+    `);
+    win.document.close();
+    win.print();
+  };
 
   return (
     <section className="rounded-2xl p-5 shadow-md" style={{ background: 'white', border: highlight ? `2px solid #5C8A4A` : 'none' }}>
@@ -146,20 +190,20 @@ function OrderCard({ order, onPaid, onServed, highlight = false }) {
         {order.items.map((item, idx) => (
           <div key={idx} className="flex justify-between">
             <span>{item.qty}x {item.name}</span>
-            <span>{(item.qty * item.price).toLocaleString()} FCFA</span>
+            <span>{(item.qty * item.price).toLocaleString()} {currency}</span>
           </div>
         ))}
       </div>
 
       <div className="flex items-center justify-between border-t pt-3 mb-3" style={{ borderColor: colors.sand }}>
-        <strong style={{ color: colors.primary }}>{order.total.toLocaleString()} FCFA</strong>
+        <strong style={{ color: colors.primary }}>{order.total.toLocaleString()} {currency}</strong>
         <span className="text-sm" style={{ color: order.paymentStatus === 'paid' ? '#5C8A4A' : colors.textLight }}>
           {order.paymentStatus === 'paid' ? 'Argent recu' : 'A confirmer'}
         </span>
       </div>
 
       <div className="rounded-lg px-3 py-2 mb-3 text-sm" style={{ background: order.paymentStatus === 'paid' ? '#5C8A4A20' : colors.sand, color: order.paymentStatus === 'paid' ? '#315C25' : colors.text }}>
-        Client a {declaredCash.toLocaleString()} FCFA - Monnaie a remettre {changeDue.toLocaleString()} FCFA
+        Client a {declaredCash.toLocaleString()} {currency} - Monnaie a remettre {changeDue.toLocaleString()} {currency}
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -174,6 +218,11 @@ function OrderCard({ order, onPaid, onServed, highlight = false }) {
         {onServed && (
           <button onClick={() => onServed(order)} disabled={order.paymentStatus !== 'paid'} className="col-span-2 py-3 rounded-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>
             <CheckCircle size={18} /> Marquer servie
+          </button>
+        )}
+        {order.paymentStatus === 'paid' && (
+          <button onClick={printReceipt} className="col-span-2 py-2 rounded-lg font-medium flex items-center justify-center gap-2" style={{ background: colors.sand, color: colors.text }}>
+            <Printer size={17} /> Imprimer facture
           </button>
         )}
       </div>

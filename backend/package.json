@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
+    "start": "node --env-file=.env server.js",
+    "dev": "node --env-file=.env --watch server.js",
     "test": "node --test",
-    "mysql:init": "node scripts/init-mysql.js",
-    "mysql:migrate": "node scripts/migrate-sqlite-to-mysql.js",
-    "mysql:backup": "node scripts/backup-mysql.js"
+    "mysql:init": "node --env-file=.env scripts/init-mysql.js",
+    "mysql:migrate": "node --env-file=.env scripts/migrate-sqlite-to-mysql.js",
+    "mysql:backup": "node --env-file=.env scripts/backup-mysql.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

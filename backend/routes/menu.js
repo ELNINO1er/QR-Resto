@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { queryAll, queryOne, run } from '../db.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
+import { getRestaurantOrNull, requestedRestaurantId, requireActiveRestaurant, scopedRestaurantId } from '../middleware/tenant.js';
 
 const router = Router();
 const MAX_IMAGE_LENGTH = 3 * 1024 * 1024;
@@ -92,16 +93,15 @@ function cleanDishInput(body, existing = {}) {
   };
 }
 
-function scopedRestaurantId(req) {
-  return req.user?.restaurantId || 1;
-}
-
 async function sendMenu(req, res, includeAll = false) {
-  const restaurantId = scopedRestaurantId(req);
+  const restaurantId = includeAll ? scopedRestaurantId(req) : (requestedRestaurantId(req) || 1);
+  const restaurant = await getRestaurantOrNull(restaurantId);
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable' });
+  if (restaurant.status !== 'active' && req.user?.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Restaurant suspendu' });
+  }
   const dishes = includeAll
-    ? req.user?.role === 'superadmin'
-      ? queryAll('SELECT * FROM dishes ORDER BY category, name')
-      : queryAll('SELECT * FROM dishes WHERE restaurant_id = ? ORDER BY category, name', [restaurantId])
+    ? queryAll('SELECT * FROM dishes WHERE restaurant_id = ? ORDER BY category, name', [restaurantId])
     : queryAll('SELECT * FROM dishes WHERE restaurant_id = ? AND COALESCE(visible, 1) = 1 AND stock > 0 ORDER BY category, name', [restaurantId]);
   return res.json((await dishes).map(formatDish));
 }
@@ -109,13 +109,13 @@ async function sendMenu(req, res, includeAll = false) {
 // Public: get menu. Admin can request all dishes with ?all=1.
 router.get('/', async (req, res) => {
   if (req.query.all === '1') {
-    return authMiddleware(req, res, () => adminOnly(req, res, () => sendMenu(req, res, true)));
+    return authMiddleware(req, res, () => requireActiveRestaurant(req, res, () => adminOnly(req, res, () => sendMenu(req, res, true))));
   }
   return await sendMenu(req, res);
 });
 
 // Admin: add dish
-router.post('/', authMiddleware, adminOnly, async (req, res) => {
+router.post('/', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
   const { image, available, visible, veg, glutenFree, spicy } = req.body;
   let cleanInput;
   let cleanImage;
@@ -142,7 +142,7 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
 });
 
 // Admin: update dish
-router.patch('/:id', authMiddleware, adminOnly, async (req, res) => {
+router.patch('/:id', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
   const { id } = req.params;
   const existing = req.user.role === 'superadmin'
     ? await queryOne('SELECT * FROM dishes WHERE id = ?', [id])
@@ -187,7 +187,7 @@ router.patch('/:id', authMiddleware, adminOnly, async (req, res) => {
 });
 
 // Admin: delete dish
-router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
+router.delete('/:id', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
   const result = req.user.role === 'superadmin'
     ? await run('DELETE FROM dishes WHERE id = ?', [req.params.id])
     : await run('DELETE FROM dishes WHERE id = ? AND restaurant_id = ?', [req.params.id, scopedRestaurantId(req)]);

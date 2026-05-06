@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import MenuPage from './pages/MenuPage';
@@ -10,7 +10,9 @@ import ServerPage from './pages/ServerPage';
 
 function TableRedirect() {
   const { table } = useParams();
-  return <Navigate to={`/menu?table=${table}`} replace />;
+  const location = useLocation();
+  const suffix = location.search ? `&${location.search.slice(1)}` : '';
+  return <Navigate to={`/menu?table=${table}${suffix}`} replace />;
 }
 
 function ProtectedRoute({ children, roles }) {
@@ -32,6 +34,12 @@ function ProtectedRoute({ children, roles }) {
   return children;
 }
 
+function dashboardPathForRole(role) {
+  if (role === 'cuisine') return '/kitchen';
+  if (role === 'serveur') return '/server';
+  return '/admin';
+}
+
 function AppRoutes() {
   const { user } = useAuth();
 
@@ -39,10 +47,10 @@ function AppRoutes() {
     <Routes>
       <Route path="/menu" element={<MenuPage />} />
       <Route path="/t/:table" element={<TableRedirect />} />
-      <Route path="/login" element={user ? <Navigate to="/admin" replace /> : <LoginPage />} />
+      <Route path="/login" element={user ? <Navigate to={dashboardPathForRole(user.role)} replace /> : <LoginPage />} />
       <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
-      <Route path="/kitchen" element={<ProtectedRoute roles={['admin', 'cuisine']}><KitchenPage /></ProtectedRoute>} />
-      <Route path="/server" element={<ProtectedRoute roles={['admin', 'serveur']}><ServerPage /></ProtectedRoute>} />
+      <Route path="/kitchen" element={<ProtectedRoute roles={['superadmin', 'admin', 'cuisine']}><KitchenPage /></ProtectedRoute>} />
+      <Route path="/server" element={<ProtectedRoute roles={['superadmin', 'admin', 'serveur']}><ServerPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/menu" replace />} />
     </Routes>
   );

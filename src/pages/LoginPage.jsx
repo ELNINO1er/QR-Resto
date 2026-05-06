@@ -4,6 +4,12 @@ import { ChefHat, Eye, EyeOff } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useAuth } from '../context/AuthContext';
 
+function dashboardPathForRole(role) {
+  if (role === 'cuisine') return '/kitchen';
+  if (role === 'serveur') return '/server';
+  return '/admin';
+}
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -18,8 +24,8 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      await login(email, password);
-      navigate('/admin', { replace: true });
+      const user = await login(email, password);
+      navigate(dashboardPathForRole(user.role), { replace: true });
     } catch (err) {
       setError(err.message || 'Identifiants incorrects');
     } finally {
@@ -34,8 +40,8 @@ export default function LoginPage() {
           <div className="inline-block p-3 rounded-xl mb-4" style={{ background: colors.primary }}>
             <ChefHat size={32} style={{ color: colors.gold }} />
           </div>
-          <h2 className="text-2xl font-bold" style={{ color: colors.text }}>Connexion Admin</h2>
-          <p className="text-sm mt-2" style={{ color: colors.textLight }}>Accedez a votre tableau de bord</p>
+          <h2 className="text-2xl font-bold" style={{ color: colors.text }}>Connexion personnel</h2>
+          <p className="text-sm mt-2" style={{ color: colors.textLight }}>Admin, cuisine, serveur et caisse</p>
         </div>
 
         {error && (

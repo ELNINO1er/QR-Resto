@@ -1,9 +1,21 @@
 const API_BASE = '/api';
+const ACTIVE_RESTAURANT_KEY = 'activeRestaurantId';
+
+export function setActiveRestaurantId(restaurantId) {
+  if (restaurantId) localStorage.setItem(ACTIVE_RESTAURANT_KEY, String(restaurantId));
+  else localStorage.removeItem(ACTIVE_RESTAURANT_KEY);
+}
+
+export function getActiveRestaurantId() {
+  return localStorage.getItem(ACTIVE_RESTAURANT_KEY);
+}
 
 async function request(path, options = {}) {
   const token = localStorage.getItem('token');
   const headers = { 'Content-Type': 'application/json', ...options.headers };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  const activeRestaurantId = getActiveRestaurantId();
+  if (activeRestaurantId) headers['X-Restaurant-Id'] = activeRestaurantId;
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const data = await res.json();
@@ -23,7 +35,13 @@ export const changePassword = (currentPassword, newPassword) =>
   request('/auth/password', { method: 'PATCH', body: JSON.stringify({ currentPassword, newPassword }) });
 
 // Menu
-export const getMenu = (all = false) => request(`/menu${all ? '?all=1' : ''}`);
+export const getMenu = (all = false, restaurantId) => {
+  const params = new URLSearchParams();
+  if (all) params.set('all', '1');
+  if (restaurantId) params.set('restaurantId', restaurantId);
+  const qs = params.toString();
+  return request(`/menu${qs ? `?${qs}` : ''}`);
+};
 export const addDish = (dish) =>
   request('/menu', { method: 'POST', body: JSON.stringify(dish) });
 export const updateDish = (id, data) =>
@@ -53,6 +71,8 @@ export async function exportOrdersCsv(from, to) {
   const token = localStorage.getItem('token');
   const headers = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  const activeRestaurantId = getActiveRestaurantId();
+  if (activeRestaurantId) headers['X-Restaurant-Id'] = activeRestaurantId;
 
   const res = await fetch(`${API_BASE}/orders/export.csv?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { headers });
   if (!res.ok) {
@@ -87,8 +107,8 @@ export const updateRestaurant = (id, restaurant) =>
   request(`/restaurants/${id}`, { method: 'PATCH', body: JSON.stringify(restaurant) });
 
 // Settings
-export const getPublicSettings = () => request('/settings/public');
-export const getNetworkInfo = () => request('/settings/network');
+export const getPublicSettings = (restaurantId) => request(`/settings/public${restaurantId ? `?restaurantId=${encodeURIComponent(restaurantId)}` : ''}`);
+export const getNetworkInfo = (restaurantId) => request(`/settings/network${restaurantId ? `?restaurantId=${encodeURIComponent(restaurantId)}` : ''}`);
 export const getSettings = () => request('/settings');
 export const updateSettings = (data) =>
   request('/settings', { method: 'PATCH', body: JSON.stringify(data) });

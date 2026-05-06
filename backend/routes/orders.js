@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { isMysql, queryAll, queryOne, run, runNoSave, transaction } from '../db.js';
 import { authMiddleware, requireRoles } from '../middleware/auth.js';
+import { getRestaurantOrNull, requestedRestaurantId, requireActiveRestaurant } from '../middleware/tenant.js';
 
 const router = Router();
 
@@ -15,9 +16,11 @@ async function getOrderById(id) {
 }
 
 function scopeForUser(req, alias = '') {
-  if (req.user?.role === 'superadmin') return { clause: '', params: [] };
   const prefix = alias ? `${alias}.` : '';
-  return { clause: ` AND ${prefix}restaurant_id = ?`, params: [req.user?.restaurantId || 1] };
+  const selectedRestaurantId = req.user?.role === 'superadmin' ? requestedRestaurantId(req) : null;
+  const restaurantId = selectedRestaurantId || req.user?.restaurantId;
+  if (!restaurantId && req.user?.role === 'superadmin') return { clause: '', params: [] };
+  return { clause: ` AND ${prefix}restaurant_id = ?`, params: [restaurantId || 1] };
 }
 
 // Fix 12: Manual time formatting (not locale-dependent)
@@ -32,6 +35,7 @@ function formatTime(dateStr) {
 function formatOrder(o, items) {
   return {
     id: o.id,
+    restaurantId: o.restaurant_id || 1,
     table: o.table_number,
     items: items.map(i => ({ dishId: i.dish_id, name: i.name, qty: i.quantity, price: i.price })),
     total: o.total,
@@ -72,11 +76,11 @@ function buildOrderItems(rawItems) {
 }
 
 // Fix 5: Validate table number against tables_count setting
-function getTablesCount() {
-  return queryOne("SELECT value FROM settings WHERE key = 'tables_count'")
+function getTablesCount(restaurantId) {
+  return queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND key = 'tables_count'", [restaurantId])
     .then?.(row => row ? parseInt(row.value, 10) || 100 : 100)
     || (() => {
-      const row = queryOne("SELECT value FROM settings WHERE key = 'tables_count'");
+      const row = queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND key = 'tables_count'", [restaurantId]);
       return row ? parseInt(row.value, 10) || 100 : 100;
     })();
 }
@@ -89,7 +93,7 @@ async function validateOrder(table, items, restaurantId = 1) {
     throw error;
   }
 
-  const maxTables = await getTablesCount();
+  const maxTables = await getTablesCount(restaurantId);
   if (tableNumber > maxTables) {
     const error = new Error(`Table invalide (max ${maxTables})`);
     error.status = 400;
@@ -152,7 +156,10 @@ function restoreStockItems(items) {
 // Fix 1+6+14: cashAmount is optional (declaration), payment_status coherent, accept decimals
 router.post('/', async (req, res) => {
   const { table, items, notes, cashAmount } = req.body;
-  const restaurantId = Number(req.body.restaurantId) || 1;
+  const restaurantId = requestedRestaurantId(req) || 1;
+  const restaurant = await getRestaurantOrNull(restaurantId);
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable' });
+  if (restaurant.status !== 'active') return res.status(403).json({ error: 'Restaurant suspendu' });
   let validated;
   try {
     validated = await validateOrder(table, items, restaurantId);
@@ -204,17 +211,15 @@ router.post('/', async (req, res) => {
 // Fix 4: Static routes BEFORE parameterized routes
 
 // Admin: stats
-router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), async (req, res) => {
+router.get('/stats', authMiddleware, requireActiveRestaurant, requireRoles('admin', 'caisse'), async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const scope = scopeForUser(req);
   const todayOrders = await queryOne(
     `SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as revenue FROM orders WHERE date(created_at) = date(?) AND status != 'cancelled'${scope.clause}`, [today, ...scope.params]
   );
   const lowStock = await queryOne(
-    req.user.role === 'superadmin'
-      ? 'SELECT COUNT(*) as count FROM dishes WHERE stock < 10 AND stock > 0'
-      : 'SELECT COUNT(*) as count FROM dishes WHERE stock < 10 AND stock > 0 AND restaurant_id = ?',
-    req.user.role === 'superadmin' ? [] : [req.user.restaurantId || 1]
+    `SELECT COUNT(*) as count FROM dishes WHERE stock < 10 AND stock > 0${scope.clause}`,
+    scope.params
   );
   const topDishes = await queryAll(`
     SELECT
@@ -224,12 +229,12 @@ router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), async (req
       SUM(oi.quantity) as quantity,
       SUM(oi.quantity * oi.price) as revenue
     FROM order_items oi
-    JOIN orders o ON o.id = oi.order_id AND o.status != 'cancelled'${req.user.role === 'superadmin' ? '' : ' AND o.restaurant_id = ?'}
+    JOIN orders o ON o.id = oi.order_id AND o.status != 'cancelled'${scope.clause.replace(' AND ', ' AND o.')}
     LEFT JOIN dishes d ON d.id = oi.dish_id
     GROUP BY oi.dish_id, oi.name, d.image
     ORDER BY quantity DESC, revenue DESC
     LIMIT 5
-  `, req.user.role === 'superadmin' ? [] : [req.user.restaurantId || 1]);
+  `, scope.params);
   const hours = await queryAll(isMysql() ? `
     SELECT DATE_FORMAT(created_at, '%H') as hour, COUNT(*) as count
     FROM orders
@@ -260,7 +265,7 @@ router.get('/stats', authMiddleware, requireRoles('admin', 'caisse'), async (req
   });
 });
 
-router.get('/reports', authMiddleware, requireRoles('admin', 'caisse'), async (req, res) => {
+router.get('/reports', authMiddleware, requireActiveRestaurant, requireRoles('admin', 'caisse'), async (req, res) => {
   const scope = scopeForUser(req);
   const period = ['day', 'week', 'month'].includes(req.query.period) ? req.query.period : 'day';
   const format = period === 'day' ? '%Y-%m-%d' : period === 'week' ? '%Y-W%W' : '%Y-%m';
@@ -289,16 +294,16 @@ router.get('/reports', authMiddleware, requireRoles('admin', 'caisse'), async (r
   const topDishes = await queryAll(`
     SELECT oi.name, COALESCE(d.image, '') as image, SUM(oi.quantity) as quantity, SUM(oi.quantity * oi.price) as revenue
     FROM order_items oi
-    JOIN orders o ON o.id = oi.order_id AND o.status != 'cancelled'${req.user.role === 'superadmin' ? '' : ' AND o.restaurant_id = ?'}
+    JOIN orders o ON o.id = oi.order_id AND o.status != 'cancelled'${scope.clause.replace(' AND ', ' AND o.')}
     LEFT JOIN dishes d ON d.id = oi.dish_id
     GROUP BY oi.dish_id, oi.name, d.image
     ORDER BY quantity DESC, revenue DESC
     LIMIT 10
-  `, req.user.role === 'superadmin' ? [] : [req.user.restaurantId || 1]);
+  `, scope.params);
   res.json({ period, sales, topDishes });
 });
 
-router.get('/export.csv', authMiddleware, requireRoles('admin', 'caisse'), async (req, res) => {
+router.get('/export.csv', authMiddleware, requireActiveRestaurant, requireRoles('admin', 'caisse'), async (req, res) => {
   const from = req.query.from || '1970-01-01';
   const to = req.query.to || new Date().toISOString().split('T')[0];
   const scope = scopeForUser(req);
@@ -350,13 +355,16 @@ router.get('/:id/public', async (req, res) => {
     paymentStatus: order.paymentStatus,
     amountPaid: order.amountPaid,
     changeDue: order.changeDue,
+    paidAt: order.paidAt,
+    paymentMethod: order.paymentMethod,
+    createdAt: order.createdAt,
     time: order.time,
     items: order.items,
   });
 });
 
 // Fix 9: Default date filter (today) to avoid returning entire history
-router.get('/', authMiddleware, requireRoles('admin', 'serveur', 'cuisine', 'caisse'), async (req, res) => {
+router.get('/', authMiddleware, requireActiveRestaurant, requireRoles('admin', 'serveur', 'cuisine', 'caisse'), async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
   const from = req.query.from || today;
   const to = req.query.to || today;
@@ -373,7 +381,7 @@ router.get('/', authMiddleware, requireRoles('admin', 'serveur', 'cuisine', 'cai
 });
 
 // Admin: update order status
-router.patch('/:id', authMiddleware, requireRoles('admin', 'serveur', 'cuisine'), async (req, res) => {
+router.patch('/:id', authMiddleware, requireActiveRestaurant, requireRoles('admin', 'serveur', 'cuisine'), async (req, res) => {
   const { status } = req.body;
   const valid = ['pending', 'preparing', 'ready', 'served', 'cancelled'];
   if (!valid.includes(status)) {
@@ -403,7 +411,7 @@ router.patch('/:id', authMiddleware, requireRoles('admin', 'serveur', 'cuisine')
   res.json(order);
 });
 
-router.patch('/:id/payment', authMiddleware, requireRoles('admin', 'serveur', 'caisse'), async (req, res) => {
+router.patch('/:id/payment', authMiddleware, requireActiveRestaurant, requireRoles('admin', 'serveur', 'caisse'), async (req, res) => {
   const { paymentStatus, paymentMethod } = req.body;
   const validStatus = ['unpaid', 'paid', 'refunded'];
   const validMethods = ['', 'cash', 'mobile_money', 'card'];

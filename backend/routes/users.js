@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { queryAll, queryOne, run } from '../db.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
+import { requestedRestaurantId, requireActiveRestaurant } from '../middleware/tenant.js';
 
 const router = Router();
 const roles = ['admin', 'serveur', 'cuisine', 'caisse'];
@@ -33,12 +34,13 @@ function formatUser(user) {
   };
 }
 
-router.use(authMiddleware, adminOnly);
+router.use(authMiddleware, requireActiveRestaurant, adminOnly);
 
 router.get('/', async (req, res) => {
-  const users = req.user.role === 'superadmin'
+  const selectedRestaurantId = req.user.role === 'superadmin' ? requestedRestaurantId(req) : null;
+  const users = req.user.role === 'superadmin' && !selectedRestaurantId
     ? await queryAll('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users ORDER BY created_at DESC')
-    : await queryAll('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users WHERE restaurant_id = ? ORDER BY created_at DESC', [req.user.restaurantId || 1]);
+    : await queryAll('SELECT id, restaurant_id, email, name, role, default_password_changed, created_at FROM users WHERE restaurant_id = ? ORDER BY created_at DESC', [selectedRestaurantId || req.user.restaurantId || 1]);
   res.json(users.map(formatUser));
 });
 
@@ -58,7 +60,7 @@ router.post('/', async (req, res) => {
   if (existing) return res.status(409).json({ error: 'Email deja utilise' });
 
   const restaurantId = req.user.role === 'superadmin'
-    ? Number(req.body.restaurantId || req.user.restaurantId || 1)
+    ? Number(req.body.restaurantId || requestedRestaurantId(req) || req.user.restaurantId || 1)
     : (req.user.restaurantId || 1);
   const hash = bcrypt.hashSync(password, 10);
   const result = await run(

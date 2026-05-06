@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { queryAll, queryOne, run } from '../db.js';
+import { isMysql, queryAll, queryOne, run } from '../db.js';
 import { authMiddleware, superAdminOnly } from '../middleware/auth.js';
 
 const router = Router();
@@ -29,7 +29,25 @@ router.post('/', async (req, res) => {
   if (existing) return res.status(409).json({ error: 'Restaurant deja existant' });
 
   const result = await run('INSERT INTO restaurants (name, slug, status) VALUES (?, ?, ?)', [name, slug, 'active']);
-  res.status(201).json(await queryOne('SELECT * FROM restaurants WHERE id = ?', [result.lastInsertRowid]));
+  const restaurantId = result.lastInsertRowid;
+  const defaults = [
+    ['restaurant_name', name],
+    ['address', ''],
+    ['phone', ''],
+    ['currency', 'FCFA'],
+    ['tables_count', '12'],
+    ['qr_base_url', process.env.QR_BASE_URL || ''],
+    ['timezone', process.env.APP_TIME_ZONE || 'Africa/Abidjan'],
+    ['receipt_thank_you', 'Merci pour votre visite et a bientot.'],
+  ];
+  for (const [key, value] of defaults) {
+    if (isMysql()) {
+      await run('INSERT INTO settings (restaurant_id, `key`, value) VALUES (?, ?, ?)', [restaurantId, key, value]);
+    } else {
+      await run('INSERT INTO settings (restaurant_id, key, value) VALUES (?, ?, ?)', [restaurantId, key, value]);
+    }
+  }
+  res.status(201).json(await queryOne('SELECT * FROM restaurants WHERE id = ?', [restaurantId]));
 });
 
 router.patch('/:id', async (req, res) => {

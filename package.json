@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "dev": "vite",
-    "dev:backend": "cd backend && node --watch server.js",
-    "dev:all": "start /B cmd /c \"cd backend && node server.js\" && vite",
+    "dev:backend": "cd backend && node --env-file=.env --watch server.js",
+    "dev:all": "start /B cmd /c \"cd backend && node --env-file=.env server.js\" && vite",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },

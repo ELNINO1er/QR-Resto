@@ -15,6 +15,12 @@ router.post('/login', async (req, res) => {
   if (!user || !bcrypt.compareSync(password, user.password)) {
     return res.status(401).json({ error: 'Identifiants incorrects' });
   }
+  if (user.role !== 'superadmin') {
+    const restaurant = await queryOne('SELECT status FROM restaurants WHERE id = ?', [user.restaurant_id || 1]);
+    if (!restaurant || restaurant.status !== 'active') {
+      return res.status(403).json({ error: 'Restaurant suspendu' });
+    }
+  }
 
   const token = generateToken(user);
   res.json({

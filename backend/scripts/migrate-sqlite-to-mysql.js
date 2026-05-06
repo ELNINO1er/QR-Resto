@@ -61,12 +61,35 @@ try {
   const orderItems = sqliteAll('SELECT id, order_id, dish_id, name, quantity, price FROM order_items');
   await insertRows('order_items', ['id', 'order_id', 'dish_id', 'name', 'quantity', 'price'], orderItems);
 
-  const settings = sqliteAll('SELECT key, value FROM settings').map(row => ({
-    restaurant_id: 1,
-    key: row.key,
-    value: row.value,
-  }));
+  const settingsColumns = sqliteAll('PRAGMA table_info(settings)').map(column => column.name);
+  const settings = settingsColumns.includes('restaurant_id')
+    ? sqliteAll('SELECT restaurant_id, key, value FROM settings')
+    : sqliteAll('SELECT key, value FROM settings').map(row => ({
+      restaurant_id: 1,
+      key: row.key,
+      value: row.value,
+    }));
   await insertRows('settings', ['restaurant_id', 'key', 'value'], settings);
+
+  const [restaurantsForSettings] = await mysqlDb.query('SELECT id, name FROM restaurants');
+  for (const restaurant of restaurantsForSettings) {
+    const defaults = [
+      ['restaurant_name', restaurant.name || 'Restaurant'],
+      ['address', ''],
+      ['phone', ''],
+      ['currency', 'FCFA'],
+      ['tables_count', '12'],
+      ['qr_base_url', process.env.QR_BASE_URL || ''],
+      ['timezone', process.env.APP_TIME_ZONE || 'Africa/Abidjan'],
+      ['receipt_thank_you', 'Merci pour votre visite et a bientot.'],
+    ];
+    for (const [key, value] of defaults) {
+      await mysqlDb.execute(
+        'INSERT IGNORE INTO settings (restaurant_id, `key`, value) VALUES (?, ?, ?)',
+        [restaurant.id, key, value]
+      );
+    }
+  }
 
   await mysqlDb.commit();
   console.log('[MYSQL] SQLite data migrated to MySQL');

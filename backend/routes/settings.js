@@ -2,23 +2,25 @@ import { Router } from 'express';
 import os from 'os';
 import { isMysql, queryAll, run } from '../db.js';
 import { authMiddleware, adminOnly } from '../middleware/auth.js';
+import { requestedRestaurantId, requireActiveRestaurant, scopedRestaurantId } from '../middleware/tenant.js';
 import { APP_TIME_ZONE, getQrBaseUrl } from '../config.js';
 
 const router = Router();
 
-async function getSettings(filter) {
+async function getSettings(restaurantId, filter) {
   const query = filter
-    ? `SELECT * FROM settings WHERE key IN (${filter.map(() => '?').join(',')})`
-    : 'SELECT * FROM settings';
-  const rows = await queryAll(query, filter || []);
+    ? `SELECT \`key\`, value FROM settings WHERE restaurant_id = ? AND \`key\` IN (${filter.map(() => '?').join(',')})`
+    : 'SELECT `key`, value FROM settings WHERE restaurant_id = ?';
+  const rows = await queryAll(query, [restaurantId, ...(filter || [])]);
   const settings = {};
   for (const row of rows) settings[row.key] = row.value;
   return settings;
 }
 
 // Public
-router.get('/public', async (_req, res) => {
-  res.json(await getSettings(['restaurant_name', 'currency', 'tables_count', 'qr_base_url', 'timezone']));
+router.get('/public', async (req, res) => {
+  const restaurantId = requestedRestaurantId(req) || 1;
+  res.json(await getSettings(restaurantId, ['restaurant_name', 'address', 'phone', 'currency', 'tables_count', 'qr_base_url', 'timezone', 'receipt_thank_you']));
 });
 
 router.get('/network', async (req, res) => {
@@ -35,7 +37,8 @@ router.get('/network', async (req, res) => {
   const hostPort = host.includes(':') ? host.split(':').pop() : '';
   const port = refererPort || (hostPort && hostPort !== '3001' ? hostPort : '5173');
   const preferred = addresses.find(ip => ip.startsWith('192.168.')) || addresses[0] || 'localhost';
-  const settings = await getSettings(['qr_base_url']);
+  const restaurantId = requestedRestaurantId(req) || 1;
+  const settings = await getSettings(restaurantId, ['qr_base_url']);
   const detectedOrigin = `http://${preferred}:${port}`;
   const configuredOrigin = getQrBaseUrl(settings.qr_base_url);
 
@@ -48,13 +51,14 @@ router.get('/network', async (req, res) => {
 });
 
 // Admin: all settings
-router.get('/', authMiddleware, adminOnly, async (_req, res) => {
-  res.json(await getSettings());
+router.get('/', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
+  res.json(await getSettings(scopedRestaurantId(req)));
 });
 
 // Admin: update settings
-router.patch('/', authMiddleware, adminOnly, async (req, res) => {
-  const allowed = new Set(['restaurant_name', 'address', 'phone', 'currency', 'tables_count', 'qr_base_url', 'timezone']);
+router.patch('/', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
+  const restaurantId = scopedRestaurantId(req);
+  const allowed = new Set(['restaurant_name', 'address', 'phone', 'currency', 'tables_count', 'qr_base_url', 'timezone', 'receipt_thank_you']);
   const clean = {};
 
   for (const [key, value] of Object.entries(req.body)) {
@@ -66,6 +70,9 @@ router.patch('/', authMiddleware, adminOnly, async (req, res) => {
     }
     if (key === 'phone' && text.length > 40) {
       return res.status(400).json({ error: 'Telephone trop long' });
+    }
+    if (key === 'receipt_thank_you' && text.length > 220) {
+      return res.status(400).json({ error: 'Message de facture trop long' });
     }
     if (key === 'currency' && !['FCFA', 'XOF'].includes(text)) {
       return res.status(400).json({ error: 'Devise invalide' });
@@ -91,14 +98,17 @@ router.patch('/', authMiddleware, adminOnly, async (req, res) => {
   for (const [key, value] of Object.entries(clean)) {
     if (isMysql()) {
       await run(
-        'INSERT INTO settings (restaurant_id, `key`, value) VALUES (1, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
-        [key, value]
+        'INSERT INTO settings (restaurant_id, `key`, value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
+        [restaurantId, key, value]
       );
     } else {
-      await run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, value]);
+      await run(
+        'INSERT INTO settings (restaurant_id, key, value) VALUES (?, ?, ?) ON CONFLICT(restaurant_id, key) DO UPDATE SET value = excluded.value',
+        [restaurantId, key, value]
+      );
     }
   }
-  res.json(await getSettings());
+  res.json(await getSettings(restaurantId));
 });
 
 export default router;

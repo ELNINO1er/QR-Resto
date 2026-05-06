@@ -6,7 +6,6 @@ import {
   Clock, CheckCircle, X, ChefHat, Utensils, Home, Menu as MenuIcon,
   BarChart3, Settings, Eye, EyeOff, Save, AlertCircle, DollarSign,
   QrCode, LogOut, Users, CreditCard, History, Printer, Download, KeyRound,
-  Volume2
 } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useAuth } from '../context/AuthContext';
@@ -16,13 +15,23 @@ import {
   updateSettings as apiUpdateSettings, updatePayment, getUsers, createUser,
   updateUser, deleteUser as apiDeleteUser, changePassword, getReports,
   exportOrdersCsv, getNetworkInfo, getRestaurants, createRestaurant,
-  updateRestaurant, getBackups, createBackup, restoreBackup, exportDatabaseUrl
+  updateRestaurant, getBackups, createBackup, restoreBackup, exportDatabaseUrl,
+  getActiveRestaurantId, setActiveRestaurantId
 } from '../lib/api';
 import { connectWs, onWsMessage, disconnectWs } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishModal from '../components/DishModal';
 import DishImage from '../components/DishImage';
 import Dropdown from '../components/Dropdown';
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
 
 export default function AdminPage() {
   const navigate = useNavigate();
@@ -40,6 +49,7 @@ export default function AdminPage() {
   const [users, setUsers] = useState([]);
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'serveur', password: '' });
   const [restaurants, setRestaurants] = useState([]);
+  const [activeRestaurantId, setActiveRestaurantIdState] = useState(getActiveRestaurantId());
   const [newRestaurant, setNewRestaurant] = useState({ name: '', slug: '' });
   const [backups, setBackups] = useState([]);
   const [reports, setReports] = useState({ sales: [], topDishes: [] });
@@ -73,7 +83,15 @@ export default function AdminPage() {
       else setReports({ sales: [], topDishes: [] });
       if (['superadmin', 'admin'].includes(user?.role)) getUsers().then(setUsers).catch(() => {});
       if (user?.role === 'superadmin') {
-        getRestaurants().then(setRestaurants).catch(() => {});
+        getRestaurants().then(data => {
+          setRestaurants(data);
+          if (!activeRestaurantId) return;
+          const activeExists = data.some(r => String(r.id) === String(activeRestaurantId));
+          if (!activeExists) {
+            setActiveRestaurantId(null);
+            setActiveRestaurantIdState(null);
+          }
+        }).catch(() => {});
         getBackups().then(setBackups).catch(() => {});
       }
       getNetworkInfo().then(info => {
@@ -83,7 +101,7 @@ export default function AdminPage() {
     } catch (err) {
       showNotif('Erreur de chargement', 'warning');
     }
-  }, [reportPeriod, user?.role]);
+  }, [activeRestaurantId, reportPeriod, user?.role]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -139,7 +157,7 @@ export default function AdminPage() {
     });
     return () => { unsub(); disconnectWs(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playNewOrderSound]);
+  }, [activeRestaurantId, playNewOrderSound]);
 
   const handleUpdateStatus = async (orderId, newStatus) => {
     try {
@@ -205,9 +223,12 @@ export default function AdminPage() {
 
   const handleCreateUser = async () => {
     try {
-      const created = await createUser(newUser);
+      const created = await createUser({
+        ...newUser,
+        restaurantId: user?.role === 'superadmin' ? (newUser.restaurantId || activeRestaurantId || 1) : undefined,
+      });
       setUsers(prev => [created, ...prev]);
-      setNewUser({ name: '', email: '', role: 'serveur', password: '' });
+      setNewUser({ name: '', email: '', role: 'serveur', password: '', restaurantId: activeRestaurantId || '' });
       showNotif('Utilisateur cree');
     } catch (err) { showNotif(err.message || 'Erreur utilisateur', 'warning'); }
   };
@@ -229,6 +250,20 @@ export default function AdminPage() {
       });
       setRestaurants(prev => prev.map(r => r.id === restaurant.id ? updated : r));
     } catch (err) { showNotif(err.message || 'Erreur restaurant', 'warning'); }
+  };
+
+  const handleManageRestaurant = (restaurant) => {
+    setActiveRestaurantId(restaurant.id);
+    setActiveRestaurantIdState(String(restaurant.id));
+    setNewUser(prev => ({ ...prev, restaurantId: String(restaurant.id) }));
+    setAdminTab('orders');
+    showNotif(`Espace ${restaurant.name} ouvert`);
+  };
+
+  const handleCloseRestaurant = () => {
+    setActiveRestaurantId(null);
+    setActiveRestaurantIdState(null);
+    setAdminTab('restaurants');
   };
 
   const handleCreateBackup = async () => {
@@ -277,14 +312,26 @@ export default function AdminPage() {
   const printTicket = (order) => {
     const win = window.open('', '_blank', 'width=420,height=640');
     if (!win) return;
+    const currency = settings.currency || 'FCFA';
+    const restaurantName = settings.restaurant_name || activeRestaurant?.name || 'Resto QR';
+    const thankYou = settings.receipt_thank_you || 'Merci pour votre visite et a bientot.';
+    const paidLabel = order.paymentStatus === 'paid' ? 'Paye' : order.paymentStatus === 'refunded' ? 'Rembourse' : 'Non paye';
     win.document.write(`
-      <html><head><title>Commande ${order.id}</title>
-      <style>body{font-family:Arial;padding:18px} h1{font-size:20px}.row{display:flex;justify-content:space-between;margin:6px 0}.total{font-weight:bold;border-top:1px solid #000;padding-top:8px}</style>
+      <html><head><title>Facture ${order.id}</title>
+      <style>body{font-family:Arial;padding:18px;color:#111}.center{text-align:center} h1{font-size:22px;margin:0 0 4px}.muted{color:#555;font-size:12px}.row{display:flex;justify-content:space-between;gap:12px;margin:6px 0}.total{font-weight:bold;border-top:1px solid #000;padding-top:8px;margin-top:8px}.thanks{border-top:1px dashed #999;margin-top:14px;padding-top:10px;text-align:center;font-size:13px}</style>
       </head><body>
-      <h1>Commande #${order.id}</h1><p>Table ${order.table} - ${order.time}</p>
-      ${order.items.map(i => `<div class="row"><span>${i.qty}x ${i.name}</span><span>${(i.qty * i.price).toLocaleString()} FCFA</span></div>`).join('')}
-      ${order.notes ? `<p><strong>Notes:</strong> ${order.notes}</p>` : ''}
-      <div class="row total"><span>Total</span><span>${order.total.toLocaleString()} FCFA</span></div>
+      <div class="center">
+        <h1>${escapeHtml(restaurantName)}</h1>
+        ${settings.address ? `<div class="muted">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings.phone ? `<div class="muted">${escapeHtml(settings.phone)}</div>` : ''}
+      </div>
+      <p><strong>Facture #${order.id}</strong><br><span class="muted">Table ${order.table} - ${escapeHtml(order.time || '')} - ${paidLabel}</span></p>
+      ${order.items.map(i => `<div class="row"><span>${i.qty}x ${escapeHtml(i.name)}</span><span>${(i.qty * i.price).toLocaleString()} ${currency}</span></div>`).join('')}
+      ${order.notes ? `<p><strong>Notes:</strong> ${escapeHtml(order.notes)}</p>` : ''}
+      <div class="row total"><span>Total</span><span>${order.total.toLocaleString()} ${currency}</span></div>
+      <div class="row"><span>Recu</span><span>${Number(order.amountPaid || 0).toLocaleString()} ${currency}</span></div>
+      <div class="row"><span>Monnaie</span><span>${Number(order.changeDue || 0).toLocaleString()} ${currency}</span></div>
+      <div class="thanks">${escapeHtml(thankYou)}</div>
       </body></html>
     `);
     win.document.close();
@@ -315,20 +362,27 @@ export default function AdminPage() {
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
+  const activeRestaurant = restaurants.find(r => String(r.id) === String(activeRestaurantId));
+  const superadminManaging = user?.role === 'superadmin' && !!activeRestaurantId;
+
   const sidebarItems = useMemo(() => [
-    { id: 'orders', icon: ShoppingCart, label: 'Commandes', roles: ['admin', 'serveur', 'cuisine'], badge: orders.filter(o => o.status === 'pending').length },
-    { id: 'payments', icon: CreditCard, label: 'Paiements', roles: ['admin', 'serveur', 'caisse'], badge: orders.filter(o => o.paymentStatus !== 'paid').length },
-    { id: 'menu', icon: MenuIcon, label: 'Menu', roles: ['admin'] },
-    { id: 'stock', icon: Package, label: 'Stock', roles: ['admin'] },
-    { id: 'history', icon: History, label: 'Historique', roles: ['admin', 'caisse'] },
-    { id: 'stats', icon: BarChart3, label: 'Statistiques', roles: ['admin', 'caisse'] },
-    { id: 'tables', icon: QrCode, label: 'Tables & QR', roles: ['admin'] },
+    { id: 'orders', icon: ShoppingCart, label: 'Commandes', roles: ['superadmin', 'admin', 'serveur', 'cuisine'], badge: orders.filter(o => o.status === 'pending').length, tenantOnly: true },
+    { id: 'payments', icon: CreditCard, label: 'Paiements', roles: ['superadmin', 'admin', 'serveur', 'caisse'], badge: orders.filter(o => o.paymentStatus !== 'paid').length, tenantOnly: true },
+    { id: 'menu', icon: MenuIcon, label: 'Menu', roles: ['superadmin', 'admin'], tenantOnly: true },
+    { id: 'stock', icon: Package, label: 'Stock', roles: ['superadmin', 'admin'], tenantOnly: true },
+    { id: 'history', icon: History, label: 'Historique', roles: ['superadmin', 'admin', 'caisse'], tenantOnly: true },
+    { id: 'stats', icon: BarChart3, label: 'Statistiques', roles: ['superadmin', 'admin', 'caisse'], tenantOnly: true },
+    { id: 'tables', icon: QrCode, label: 'Tables & QR', roles: ['superadmin', 'admin'], tenantOnly: true },
     { id: 'users', icon: Users, label: 'Utilisateurs', roles: ['superadmin', 'admin'] },
     { id: 'restaurants', icon: Home, label: 'Restaurants', roles: ['superadmin'] },
     { id: 'maintenance', icon: Download, label: 'Maintenance', roles: ['superadmin'] },
     { id: 'settings', icon: Settings, label: 'Parametres', roles: ['superadmin', 'admin'] },
     { id: 'security', icon: KeyRound, label: 'Securite', roles: ['superadmin', 'admin'] },
-  ].filter(item => item.roles.includes(user?.role || 'admin')), [orders, user?.role]);
+  ].filter(item => {
+    if (!item.roles.includes(user?.role || 'admin')) return false;
+    if (user?.role === 'superadmin' && item.tenantOnly && !superadminManaging) return false;
+    return true;
+  }), [orders, superadminManaging, user?.role]);
 
   useEffect(() => {
     if (sidebarItems.length && !sidebarItems.some(item => item.id === adminTab)) {
@@ -337,7 +391,18 @@ export default function AdminPage() {
   }, [adminTab, sidebarItems]);
 
   const tablesCount = parseInt(settings.tables_count) || 12;
-  const tableQrUrl = useCallback((table) => `${qrOrigin}/t/${table}`, [qrOrigin]);
+  const tableQrUrl = useCallback((table) => `${qrOrigin}/t/${table}?restaurantId=${activeRestaurantId || user?.restaurantId || 1}`, [activeRestaurantId, qrOrigin, user?.restaurantId]);
+  const restaurantNameById = useCallback((restaurantId) => {
+    const restaurant = restaurants.find(r => String(r.id) === String(restaurantId));
+    return restaurant?.name || `Restaurant #${restaurantId || 1}`;
+  }, [restaurants]);
+  const accessLabelByRole = {
+    superadmin: 'Plateforme',
+    admin: 'Administration',
+    serveur: 'Ecran serveur',
+    cuisine: 'Ecran cuisine',
+    caisse: 'Caisse',
+  };
 
   useEffect(() => {
     if (adminTab !== 'tables') return;
@@ -415,6 +480,17 @@ export default function AdminPage() {
       </div>
 
       <div className="lg:ml-64 p-4 lg:p-8">
+        {user?.role === 'superadmin' && activeRestaurant && (
+          <div className="mb-4 rounded-xl px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3 shadow-md" style={{ background: 'white' }}>
+            <div>
+              <p className="text-xs font-medium" style={{ color: colors.textLight }}>Restaurant actif</p>
+              <h2 className="font-bold" style={{ color: colors.text }}>{activeRestaurant.name}</h2>
+            </div>
+            <button onClick={handleCloseRestaurant} className="px-4 py-2 rounded-lg font-medium" style={{ background: colors.sand, color: colors.text }}>
+              Retour aux restaurants
+            </button>
+          </div>
+        )}
 
         {/* ===== ORDERS ===== */}
         {adminTab === 'orders' && (
@@ -814,12 +890,19 @@ export default function AdminPage() {
           <div>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Utilisateurs & roles</h2>
-              <p style={{ color: colors.textLight }}>Admin, serveur, cuisine et caisse</p>
+              <p style={{ color: colors.textLight }}>Creation des comptes de connexion du personnel</p>
             </div>
             <div className="rounded-2xl p-4 shadow-md mb-4" style={{ background: 'white' }}>
-              <div className="grid md:grid-cols-5 gap-3">
+              <div className="grid md:grid-cols-6 gap-3">
                 <input placeholder="Nom" value={newUser.name} onChange={e => setNewUser({ ...newUser, name: e.target.value })} className="px-3 py-2 rounded-lg border" />
                 <input placeholder="Email" value={newUser.email} onChange={e => setNewUser({ ...newUser, email: e.target.value })} className="px-3 py-2 rounded-lg border" />
+                {user?.role === 'superadmin' && (
+                  <Dropdown
+                    value={newUser.restaurantId || activeRestaurantId || 1}
+                    onChange={restaurantId => setNewUser({ ...newUser, restaurantId })}
+                    options={restaurants.map(r => ({ value: String(r.id), label: r.name }))}
+                  />
+                )}
                 <Dropdown
                   value={newUser.role}
                   onChange={role => setNewUser({ ...newUser, role })}
@@ -841,7 +924,9 @@ export default function AdminPage() {
                   <tr>
                     <th className="text-left px-4 py-3 text-sm">Nom</th>
                     <th className="text-left px-4 py-3 text-sm">Email</th>
+                    {user?.role === 'superadmin' && <th className="text-left px-4 py-3 text-sm">Restaurant</th>}
                     <th className="text-left px-4 py-3 text-sm">Role</th>
+                    <th className="text-left px-4 py-3 text-sm">Acces</th>
                     <th className="text-left px-4 py-3 text-sm">Securite</th>
                     <th className="text-left px-4 py-3 text-sm">Action</th>
                   </tr>
@@ -851,7 +936,9 @@ export default function AdminPage() {
                     <tr key={u.id} className="border-t" style={{ borderColor: colors.sand }}>
                       <td className="px-4 py-3">{u.name}</td>
                       <td className="px-4 py-3">{u.email}</td>
+                      {user?.role === 'superadmin' && <td className="px-4 py-3">{restaurantNameById(u.restaurantId)}</td>}
                       <td className="px-4 py-3 capitalize">{u.role}</td>
+                      <td className="px-4 py-3">{accessLabelByRole[u.role] || 'Administration'}</td>
                       <td className="px-4 py-3">{u.mustChangePassword ? 'A changer' : 'OK'}</td>
                       <td className="px-4 py-3">
                         <button onClick={async () => { await apiDeleteUser(u.id); setUsers(prev => prev.filter(x => x.id !== u.id)); }} className="px-3 py-1 rounded text-sm" style={{ background: '#EFD9D9', color: colors.primary }}>
@@ -896,7 +983,10 @@ export default function AdminPage() {
                       <td className="px-4 py-3">{r.name}</td>
                       <td className="px-4 py-3">{r.slug}</td>
                       <td className="px-4 py-3">{r.status === 'active' ? 'Actif' : 'Suspendu'}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 flex gap-2">
+                        <button onClick={() => handleManageRestaurant(r)} className="px-3 py-1 rounded text-sm" style={{ background: colors.primary, color: colors.cream }}>
+                          Gerer
+                        </button>
                         <button onClick={() => handleToggleRestaurant(r)} className="px-3 py-1 rounded text-sm" style={{ background: colors.sand, color: colors.text }}>
                           {r.status === 'active' ? 'Suspendre' : 'Activer'}
                         </button>
@@ -977,6 +1067,10 @@ export default function AdminPage() {
                       <input type="number" value={settings.tables_count || '12'} onChange={e => setSettingsState({ ...settings, tables_count: e.target.value })} className="w-full px-3 py-2 rounded-lg border-2 focus:outline-none" style={{ borderColor: colors.sandDark, background: colors.sand }} />
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Message de remerciement facture</label>
+                    <textarea value={settings.receipt_thank_you || ''} onChange={e => setSettingsState({ ...settings, receipt_thank_you: e.target.value })} className="w-full px-3 py-2 rounded-lg border-2 focus:outline-none" style={{ borderColor: colors.sandDark, background: colors.sand }} rows="3" maxLength="220" />
+                  </div>
                 </div>
               </div>
               <button onClick={handleSaveSettings} className="px-6 py-3 rounded-lg font-bold flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
@@ -991,7 +1085,7 @@ export default function AdminPage() {
           <div>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Securite</h2>
-              <p style={{ color: colors.textLight }}>Mot de passe et notifications</p>
+              <p style={{ color: colors.textLight }}>Mot de passe et acces utilisateurs</p>
             </div>
             <div className="grid lg:grid-cols-2 gap-4">
               <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
@@ -1003,16 +1097,15 @@ export default function AdminPage() {
                 </div>
               </div>
               <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
-                <h3 className="font-bold mb-4" style={{ color: colors.text }}>Notifications cuisine</h3>
-                <button onClick={() => setSoundEnabled(!soundEnabled)} className="px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: soundEnabled ? colors.primary : colors.sand, color: soundEnabled ? colors.cream : colors.text }}>
-                  <Volume2 size={18} /> {soundEnabled ? 'Son active' : 'Son coupe'}
-                </button>
-                <button onClick={() => navigate('/kitchen')} className="mt-3 px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.sand, color: colors.text }}>
-                  <ChefHat size={18} /> Ouvrir l'ecran cuisine
-                </button>
-                <button onClick={() => navigate('/server')} className="mt-3 px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.sand, color: colors.text }}>
-                  <ShoppingCart size={18} /> Ouvrir l'ecran serveur
-                </button>
+                <h3 className="font-bold mb-2" style={{ color: colors.text }}>Comptes du personnel</h3>
+                <p className="text-sm mb-4" style={{ color: colors.textLight }}>
+                  Creez les comptes cuisine, serveur, caisse et admin dans la table Utilisateurs. Chaque personne se connecte ensuite avec son email et son mot de passe.
+                </p>
+                {['superadmin', 'admin'].includes(user?.role) && (
+                  <button onClick={() => setAdminTab('users')} className="px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
+                    <Users size={18} /> Gerer les utilisateurs
+                  </button>
+                )}
               </div>
             </div>
           </div>
