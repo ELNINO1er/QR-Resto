@@ -47,7 +47,7 @@ export default function AdminPage() {
   const [showAddDish, setShowAddDish] = useState(false);
   const [qrCodes, setQrCodes] = useState({});
   const [users, setUsers] = useState([]);
-  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'serveur', password: '' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'serveur', password: '', restaurantId: '' });
   const [restaurants, setRestaurants] = useState([]);
   const [activeRestaurantId, setActiveRestaurantIdState] = useState(getActiveRestaurantId());
   const [newRestaurant, setNewRestaurant] = useState({ name: '', slug: '' });
@@ -121,6 +121,12 @@ export default function AdminPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.mustChangePassword]);
+
+  useEffect(() => {
+    if (user?.role === 'superadmin' && activeRestaurantId && !newUser.restaurantId) {
+      setNewUser(prev => ({ ...prev, restaurantId: String(activeRestaurantId) }));
+    }
+  }, [activeRestaurantId, newUser.restaurantId, user?.role]);
 
   const playNewOrderSound = useCallback(() => {
     if (!soundEnabled) return;
@@ -222,10 +228,14 @@ export default function AdminPage() {
   };
 
   const handleCreateUser = async () => {
+    if (user?.role === 'superadmin' && !newUser.restaurantId) {
+      showNotif('Selectionnez un restaurant pour cet utilisateur', 'warning');
+      return;
+    }
     try {
       const created = await createUser({
         ...newUser,
-        restaurantId: user?.role === 'superadmin' ? (newUser.restaurantId || activeRestaurantId || 1) : undefined,
+        restaurantId: user?.role === 'superadmin' ? newUser.restaurantId : undefined,
       });
       setUsers(prev => [created, ...prev]);
       setNewUser({ name: '', email: '', role: 'serveur', password: '', restaurantId: activeRestaurantId || '' });
@@ -364,6 +374,10 @@ export default function AdminPage() {
 
   const activeRestaurant = restaurants.find(r => String(r.id) === String(activeRestaurantId));
   const superadminManaging = user?.role === 'superadmin' && !!activeRestaurantId;
+  const restaurantOptions = useMemo(() => restaurants.map(r => ({
+    value: String(r.id),
+    label: `${r.name}${r.status === 'suspended' ? ' (suspendu)' : ''}`,
+  })), [restaurants]);
 
   const sidebarItems = useMemo(() => [
     { id: 'orders', icon: ShoppingCart, label: 'Commandes', roles: ['superadmin', 'admin', 'serveur', 'cuisine'], badge: orders.filter(o => o.status === 'pending').length, tenantOnly: true },
@@ -898,9 +912,10 @@ export default function AdminPage() {
                 <input placeholder="Email" value={newUser.email} onChange={e => setNewUser({ ...newUser, email: e.target.value })} className="px-3 py-2 rounded-lg border" />
                 {user?.role === 'superadmin' && (
                   <Dropdown
-                    value={newUser.restaurantId || activeRestaurantId || 1}
+                    value={newUser.restaurantId}
                     onChange={restaurantId => setNewUser({ ...newUser, restaurantId })}
-                    options={restaurants.map(r => ({ value: String(r.id), label: r.name }))}
+                    options={restaurantOptions}
+                    placeholder="Restaurant requis"
                   />
                 )}
                 <Dropdown

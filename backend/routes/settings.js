@@ -108,6 +108,9 @@ router.patch('/', authMiddleware, requireActiveRestaurant, adminOnly, async (req
       );
     }
   }
+  if (clean.restaurant_name) {
+    await run('UPDATE restaurants SET name = ? WHERE id = ?', [clean.restaurant_name, restaurantId]);
+  }
   res.json(await getSettings(restaurantId));
 });
 

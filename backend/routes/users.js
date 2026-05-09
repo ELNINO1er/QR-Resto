@@ -60,8 +60,14 @@ router.post('/', async (req, res) => {
   if (existing) return res.status(409).json({ error: 'Email deja utilise' });
 
   const restaurantId = req.user.role === 'superadmin'
-    ? Number(req.body.restaurantId || requestedRestaurantId(req) || req.user.restaurantId || 1)
+    ? Number(req.body.restaurantId || requestedRestaurantId(req))
     : (req.user.restaurantId || 1);
+  if (!Number.isInteger(restaurantId) || restaurantId <= 0) {
+    return res.status(400).json({ error: 'Restaurant requis pour cet utilisateur' });
+  }
+  const restaurant = await queryOne('SELECT id FROM restaurants WHERE id = ?', [restaurantId]);
+  if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable' });
+
   const hash = bcrypt.hashSync(password, 10);
   const result = await run(
     'INSERT INTO users (restaurant_id, email, password, role, name, default_password_changed) VALUES (?, ?, ?, ?, ?, ?)',

@@ -49,6 +49,7 @@ export default function MenuPage() {
   const [qrOrigin, setQrOrigin] = useState(window.location.origin);
   const [tableQr, setTableQr] = useState('');
   const [lastOrder, setLastOrder] = useState(null);
+  const [menuUnavailable, setMenuUnavailable] = useState('');
 
   // Get table number from URL
   useEffect(() => {
@@ -66,14 +67,23 @@ export default function MenuPage() {
 
   // Load menu + settings
   useEffect(() => {
-    Promise.all([getMenu(false, restaurantId), getPublicSettings(restaurantId)])
-      .then(([menuData, settings]) => {
-        setDishes(menuData);
+    setLoading(true);
+    setMenuUnavailable('');
+    getPublicSettings(restaurantId)
+      .then(settings => {
         setPublicSettings(settings);
         if (settings.restaurant_name) setRestaurantName(settings.restaurant_name);
         if (settings.tables_count) setTablesCount(parseInt(settings.tables_count));
       })
-      .catch(() => showNotif('Erreur de chargement du menu', 'warning'))
+      .catch(() => showNotif('Erreur de chargement du restaurant', 'warning'));
+
+    getMenu(false, restaurantId)
+      .then(setDishes)
+      .catch(err => {
+        setDishes([]);
+        setMenuUnavailable(err.message || 'Menu indisponible');
+        showNotif(err.message || 'Menu indisponible', 'warning');
+      })
       .finally(() => setLoading(false));
   }, [restaurantId]);
 
@@ -339,6 +349,11 @@ export default function MenuPage() {
 
         {/* Dishes */}
         <div className="space-y-3 pb-32">
+          {menuUnavailable && (
+            <div className="rounded-xl p-4 text-center shadow-md" style={{ background: 'white', color: colors.primary }}>
+              {menuUnavailable}
+            </div>
+          )}
           {filteredDishes.map(dish => (
             <div key={dish.id} className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white', opacity: dish.available ? 1 : 0.5 }}>
               <div className="flex">

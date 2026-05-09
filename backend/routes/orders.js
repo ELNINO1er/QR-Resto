@@ -77,10 +77,10 @@ function buildOrderItems(rawItems) {
 
 // Fix 5: Validate table number against tables_count setting
 function getTablesCount(restaurantId) {
-  return queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND key = 'tables_count'", [restaurantId])
+  return queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND `key` = 'tables_count'", [restaurantId])
     .then?.(row => row ? parseInt(row.value, 10) || 100 : 100)
     || (() => {
-      const row = queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND key = 'tables_count'", [restaurantId]);
+      const row = queryOne("SELECT value FROM settings WHERE restaurant_id = ? AND `key` = 'tables_count'", [restaurantId]);
       return row ? parseInt(row.value, 10) || 100 : 100;
     })();
 }
