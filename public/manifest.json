@@ -1,0 +1,21 @@
+{
+  "name": "Resto QR - Commande digitale",
+  "short_name": "Resto QR",
+  "description": "Scannez, commandez, savourez - Commande de restaurant par QR code",
+  "start_url": "/menu",
+  "display": "standalone",
+  "background_color": "#FAF6EF",
+  "theme_color": "#7B1F2B",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["food", "lifestyle"],
+  "lang": "fr",
+  "dir": "ltr"
+}

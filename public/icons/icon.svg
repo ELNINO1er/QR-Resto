@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#7B1F2B"/>
+  <g transform="translate(256,240)" fill="none" stroke="#C9A961" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cloche -->
+    <ellipse cx="0" cy="60" rx="120" ry="20" fill="#C9A961" opacity="0.3"/>
+    <path d="M-100,50 C-100,-20 -80,-80 0,-80 C80,-80 100,-20 100,50" fill="#C9A961" opacity="0.9"/>
+    <line x1="-120" y1="50" x2="120" y2="50" stroke="#C9A961" stroke-width="12"/>
+    <!-- Poignee -->
+    <circle cx="0" cy="-80" r="16" fill="#FAF6EF"/>
+    <!-- Vapeur -->
+    <path d="M-30,-110 C-30,-130 -10,-130 -10,-150" stroke="#FAF6EF" stroke-width="6" opacity="0.7"/>
+    <path d="M10,-100 C10,-120 30,-120 30,-140" stroke="#FAF6EF" stroke-width="6" opacity="0.7"/>
+    <path d="M-10,-95 C-10,-115 10,-115 10,-135" stroke="#FAF6EF" stroke-width="6" opacity="0.5"/>
+  </g>
+  <!-- QR text -->
+  <text x="256" y="420" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="72" fill="#FAF6EF">QR</text>
+</svg>

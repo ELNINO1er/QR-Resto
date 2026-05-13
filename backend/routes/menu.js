@@ -7,6 +7,12 @@ const router = Router();
 const MAX_IMAGE_LENGTH = 3 * 1024 * 1024;
 const VALID_CATEGORIES = ['entrees', 'plats', 'desserts', 'boissons'];
 
+// 14 allergens reglementaires EU
+const VALID_ALLERGENS = [
+  'gluten', 'crustaces', 'oeufs', 'poisson', 'arachides', 'soja', 'lait',
+  'fruits_a_coque', 'celeri', 'moutarde', 'sesame', 'sulfites', 'lupin', 'mollusques',
+];
+
 function createHttpError(message, status = 400) {
   const error = new Error(message);
   error.status = status;
@@ -29,13 +35,32 @@ function cleanPositiveInteger(value, field, { required = false, min = 1, max = 9
   return number;
 }
 
+function parseAllergens(raw) {
+  try { return JSON.parse(raw || '[]'); } catch { return []; }
+}
+
+function isAvailableNow(from, until) {
+  if (!from && !until) return true;
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (from && hhmm < from) return false;
+  if (until && hhmm > until) return false;
+  return true;
+}
+
 function formatDish(d) {
   const visible = d.visible == null ? 1 : d.visible;
+  const allergens = parseAllergens(d.allergens);
   return {
     id: d.id, name: d.name, description: d.description, price: d.price,
     category: d.category, image: d.image, stock: d.stock,
-    available: !!visible && d.stock > 0, visible: !!visible, veg: !!d.veg, glutenFree: !!d.gluten_free,
+    available: !!visible && d.stock > 0 && isAvailableNow(d.available_from, d.available_until),
+    visible: !!visible, veg: !!d.veg, glutenFree: !!d.gluten_free,
     spicy: !!d.spicy, prepTime: d.prep_time, rating: d.rating,
+    allergens,
+    availableFrom: d.available_from || null,
+    availableUntil: d.available_until || null,
+    orderCount: d.order_count || 0,
   };
 }
 
@@ -101,9 +126,14 @@ async function sendMenu(req, res, includeAll = false) {
     return res.status(403).json({ error: 'Restaurant suspendu' });
   }
   const dishes = includeAll
-    ? queryAll('SELECT * FROM dishes WHERE restaurant_id = ? ORDER BY category, name', [restaurantId])
-    : queryAll('SELECT * FROM dishes WHERE restaurant_id = ? AND COALESCE(visible, 1) = 1 AND stock > 0 ORDER BY category, name', [restaurantId]);
-  return res.json((await dishes).map(formatDish));
+    ? queryAll('SELECT * FROM dishes WHERE restaurant_id = ? ORDER BY category, order_count DESC, name', [restaurantId])
+    : queryAll('SELECT * FROM dishes WHERE restaurant_id = ? AND COALESCE(visible, 1) = 1 AND stock > 0 ORDER BY category, order_count DESC, name', [restaurantId]);
+  const formatted = (await dishes).map(formatDish);
+  // Filter out time-restricted dishes for public view
+  if (!includeAll) {
+    return res.json(formatted.filter(d => d.available));
+  }
+  return res.json(formatted);
 }
 
 // Public: get menu. Admin can request all dishes with ?all=1.
@@ -116,7 +146,7 @@ router.get('/', async (req, res) => {
 
 // Admin: add dish
 router.post('/', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
-  const { image, available, visible, veg, glutenFree, spicy } = req.body;
+  const { image, available, visible, veg, glutenFree, spicy, allergens, availableFrom, availableUntil } = req.body;
   let cleanInput;
   let cleanImage;
   try {
@@ -127,13 +157,15 @@ router.post('/', authMiddleware, requireActiveRestaurant, adminOnly, async (req,
   }
 
   const cleanVisible = visible != null ? (visible ? 1 : 0) : (available != null ? (available ? 1 : 0) : 1);
+  const cleanAllergens = Array.isArray(allergens) ? JSON.stringify(allergens.filter(a => VALID_ALLERGENS.includes(a))) : '[]';
 
   const result = await run(
-    'INSERT INTO dishes (restaurant_id, name, description, price, category, image, stock, available, visible, veg, gluten_free, spicy, prep_time) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO dishes (restaurant_id, name, description, price, category, image, stock, available, visible, veg, gluten_free, spicy, prep_time, allergens, available_from, available_until) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
     [
       req.user.restaurantId || 1, cleanInput.name, cleanInput.description, cleanInput.price, cleanInput.category,
       cleanImage, cleanInput.stock, cleanVisible && cleanInput.stock > 0 ? 1 : 0,
       cleanVisible, veg ? 1 : 0, glutenFree ? 1 : 0, spicy ? 1 : 0, cleanInput.prepTime,
+      cleanAllergens, availableFrom || null, availableUntil || null,
     ]
   );
 
@@ -167,10 +199,15 @@ router.patch('/:id', authMiddleware, requireActiveRestaurant, adminOnly, async (
       : existingVisible;
   const newAvailable = newVisible && newStock > 0 ? 1 : 0;
 
+  const cleanAllergens = Array.isArray(b.allergens) ? JSON.stringify(b.allergens.filter(a => VALID_ALLERGENS.includes(a))) : (existing.allergens || '[]');
+  const newFrom = b.availableFrom !== undefined ? (b.availableFrom || null) : existing.available_from;
+  const newUntil = b.availableUntil !== undefined ? (b.availableUntil || null) : existing.available_until;
+
   await run(
     `UPDATE dishes SET
       name = ?, description = ?, price = ?, category = ?, image = ?,
-      stock = ?, available = ?, visible = ?, veg = ?, gluten_free = ?, spicy = ?, prep_time = ?
+      stock = ?, available = ?, visible = ?, veg = ?, gluten_free = ?, spicy = ?, prep_time = ?,
+      allergens = ?, available_from = ?, available_until = ?
     WHERE id = ?`,
     [
       cleanInput.name, cleanInput.description, cleanInput.price, cleanInput.category,
@@ -178,7 +215,7 @@ router.patch('/:id', authMiddleware, requireActiveRestaurant, adminOnly, async (
       b.veg != null ? (b.veg ? 1 : 0) : existing.veg,
       b.glutenFree != null ? (b.glutenFree ? 1 : 0) : existing.gluten_free,
       b.spicy != null ? (b.spicy ? 1 : 0) : existing.spicy,
-      cleanInput.prepTime, id
+      cleanInput.prepTime, cleanAllergens, newFrom, newUntil, id
     ]
   );
 
@@ -193,6 +230,87 @@ router.delete('/:id', authMiddleware, requireActiveRestaurant, adminOnly, async 
     : await run('DELETE FROM dishes WHERE id = ? AND restaurant_id = ?', [req.params.id, scopedRestaurantId(req)]);
   if (result.changes === 0) return res.status(404).json({ error: 'Plat introuvable' });
   res.json({ success: true });
+});
+
+// ---- Formulas (menus/combos) ----
+
+function formatFormula(f, items) {
+  return {
+    id: f.id, name: f.name, description: f.description, price: f.price,
+    image: f.image, available: !!f.available,
+    availableFrom: f.available_from || null, availableUntil: f.available_until || null,
+    items: items.map(i => ({ id: i.id, category: i.category, dishId: i.dish_id, label: i.label })),
+  };
+}
+
+// Public: list formulas
+router.get('/formulas', async (req, res) => {
+  const restaurantId = requestedRestaurantId(req) || 1;
+  const formulas = await queryAll('SELECT * FROM formulas WHERE restaurant_id = ? AND available = 1 ORDER BY name', [restaurantId]);
+  const result = [];
+  for (const f of formulas) {
+    if (!isAvailableNow(f.available_from, f.available_until)) continue;
+    const items = await queryAll('SELECT * FROM formula_items WHERE formula_id = ?', [f.id]);
+    result.push(formatFormula(f, items));
+  }
+  res.json(result);
+});
+
+// Admin: create formula
+router.post('/formulas', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
+  const { name, description, price, image, items, availableFrom, availableUntil } = req.body;
+  if (!name || !price || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Nom, prix et articles requis' });
+  }
+  const cleanImage = validateImage(image);
+  const result = await run(
+    'INSERT INTO formulas (restaurant_id, name, description, price, image, available_from, available_until) VALUES (?,?,?,?,?,?,?)',
+    [scopedRestaurantId(req), name, description || '', price, cleanImage, availableFrom || null, availableUntil || null]
+  );
+  const insertedId = Number(result?.lastInsertRowid || 0);
+  const formulaId = insertedId > 0
+    ? insertedId
+    : (await queryOne('SELECT MAX(id) as id FROM formulas WHERE restaurant_id = ?', [scopedRestaurantId(req)])).id;
+  for (const item of items) {
+    await run('INSERT INTO formula_items (formula_id, category, dish_id, label) VALUES (?,?,?,?)',
+      [formulaId, item.category || '', item.dishId || null, item.label || '']);
+  }
+  const formula = await queryOne('SELECT * FROM formulas WHERE id = ?', [formulaId]) || {
+    id: formulaId,
+    name,
+    description: description || '',
+    price,
+    image: cleanImage,
+    available: 1,
+    available_from: availableFrom || null,
+    available_until: availableUntil || null,
+  };
+  const formulaItems = await queryAll('SELECT * FROM formula_items WHERE formula_id = ?', [formulaId]);
+  res.status(201).json(formatFormula(formula, formulaItems));
+});
+
+router.get('/formulas/all', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
+  const restaurantId = scopedRestaurantId(req);
+  const formulas = await queryAll('SELECT * FROM formulas WHERE restaurant_id = ? ORDER BY name', [restaurantId]);
+  const result = [];
+  for (const f of formulas) {
+    const items = await queryAll('SELECT * FROM formula_items WHERE formula_id = ?', [f.id]);
+    result.push(formatFormula(f, items));
+  }
+  res.json(result);
+});
+
+// Admin: delete formula
+router.delete('/formulas/:id', authMiddleware, requireActiveRestaurant, adminOnly, async (req, res) => {
+  await run('DELETE FROM formula_items WHERE formula_id = ?', [req.params.id]);
+  const result = await run('DELETE FROM formulas WHERE id = ? AND restaurant_id = ?', [req.params.id, scopedRestaurantId(req)]);
+  if (result.changes === 0) return res.status(404).json({ error: 'Formule introuvable' });
+  res.json({ success: true });
+});
+
+// Allergens list (reference)
+router.get('/allergens', (_req, res) => {
+  res.json(VALID_ALLERGENS);
 });
 
 export default router;

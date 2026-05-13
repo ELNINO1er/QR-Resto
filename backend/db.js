@@ -41,6 +41,7 @@ export async function initDb() {
       connectionLimit: Number(process.env.MYSQL_CONNECTION_LIMIT || 10),
       charset: 'utf8mb4',
     });
+    await migrateMysql();
     await seedMysql();
     console.log('[DB] MySQL initialized');
     return mysqlPool;
@@ -132,6 +133,87 @@ export async function initDb() {
       PRIMARY KEY (restaurant_id, key)
     )
   `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      restaurant_id INTEGER DEFAULT 1,
+      order_id INTEGER NOT NULL,
+      dish_id INTEGER NOT NULL,
+      rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+      comment TEXT DEFAULT '',
+      table_number INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (order_id) REFERENCES orders(id),
+      FOREIGN KEY (dish_id) REFERENCES dishes(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS formulas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      restaurant_id INTEGER DEFAULT 1,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      price INTEGER NOT NULL,
+      image TEXT DEFAULT '🍽️',
+      available INTEGER DEFAULT 1,
+      available_from TEXT DEFAULT NULL,
+      available_until TEXT DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS formula_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      formula_id INTEGER NOT NULL,
+      category TEXT NOT NULL,
+      dish_id INTEGER DEFAULT NULL,
+      label TEXT DEFAULT '',
+      FOREIGN KEY (formula_id) REFERENCES formulas(id) ON DELETE CASCADE,
+      FOREIGN KEY (dish_id) REFERENCES dishes(id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS table_layout (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      restaurant_id INTEGER DEFAULT 1,
+      table_number INTEGER NOT NULL,
+      x REAL DEFAULT 0,
+      y REAL DEFAULT 0,
+      seats INTEGER DEFAULT 4,
+      shape TEXT DEFAULT 'round',
+      UNIQUE(restaurant_id, table_number)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS reservations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      restaurant_id INTEGER DEFAULT 1,
+      customer_name TEXT NOT NULL,
+      customer_phone TEXT DEFAULT '',
+      customer_email TEXT DEFAULT '',
+      date TEXT NOT NULL,
+      time_slot TEXT NOT NULL,
+      party_size INTEGER NOT NULL DEFAULT 2,
+      table_number INTEGER DEFAULT NULL,
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      notes TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  migrateColumn('dishes', 'allergens', "TEXT DEFAULT '[]'");
+  migrateColumn('dishes', 'available_from', 'TEXT DEFAULT NULL');
+  migrateColumn('dishes', 'available_until', 'TEXT DEFAULT NULL');
+  migrateColumn('dishes', 'order_count', 'INTEGER DEFAULT 0');
+
+  migrateColumn('orders', 'order_type', "TEXT DEFAULT 'dine_in'");
+  migrateColumn('orders', 'delivery_address', "TEXT DEFAULT ''");
+  migrateColumn('orders', 'delivery_phone', "TEXT DEFAULT ''");
+  migrateColumn('orders', 'customer_name', "TEXT DEFAULT ''");
+  migrateColumn('orders', 'ready_at', 'DATETIME');
 
   migrateColumn('users', 'restaurant_id', `INTEGER DEFAULT ${DEFAULT_RESTAURANT_ID}`);
   migrateColumn('users', 'default_password_changed', 'INTEGER DEFAULT 0');
@@ -215,6 +297,108 @@ export async function initDb() {
   save();
   console.log('[DB] Database initialized');
   return db;
+}
+
+async function migrateMysqlColumn(table, column, definition) {
+  const [cols] = await mysqlPool.query(`SHOW COLUMNS FROM \`${table}\` LIKE ?`, [column]);
+  if (cols.length === 0) {
+    // Convert SQLite syntax to MySQL
+    let mysqlDef = definition
+      .replace(/\bINTEGER\b/g, 'INT')
+      .replace(/\bTEXT\b/g, 'VARCHAR(500)')
+      .replace(/\bREAL\b/g, 'DOUBLE');
+    await mysqlPool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${mysqlDef}`);
+    console.log(`[DB] Migration: added ${table}.${column}`);
+  }
+}
+
+async function migrateMysql() {
+  // Create missing tables
+  await mysqlPool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      restaurant_id INT DEFAULT 1,
+      order_id INT NOT NULL,
+      dish_id INT NOT NULL,
+      rating INT NOT NULL,
+      comment TEXT DEFAULT NULL,
+      table_number INT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (order_id) REFERENCES orders(id),
+      FOREIGN KEY (dish_id) REFERENCES dishes(id)
+    )
+  `);
+
+  await mysqlPool.query(`
+    CREATE TABLE IF NOT EXISTS formulas (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      restaurant_id INT DEFAULT 1,
+      name VARCHAR(255) NOT NULL,
+      description TEXT DEFAULT NULL,
+      price INT NOT NULL,
+      image VARCHAR(50) DEFAULT '🍽️',
+      available TINYINT DEFAULT 1,
+      available_from VARCHAR(10) DEFAULT NULL,
+      available_until VARCHAR(10) DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await mysqlPool.query(`
+    CREATE TABLE IF NOT EXISTS formula_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      formula_id INT NOT NULL,
+      category VARCHAR(100) NOT NULL,
+      dish_id INT DEFAULT NULL,
+      label VARCHAR(255) DEFAULT '',
+      FOREIGN KEY (formula_id) REFERENCES formulas(id) ON DELETE CASCADE,
+      FOREIGN KEY (dish_id) REFERENCES dishes(id)
+    )
+  `);
+
+  await mysqlPool.query(`
+    CREATE TABLE IF NOT EXISTS table_layout (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      restaurant_id INT DEFAULT 1,
+      table_number INT NOT NULL,
+      x DOUBLE DEFAULT 0,
+      y DOUBLE DEFAULT 0,
+      seats INT DEFAULT 4,
+      shape VARCHAR(20) DEFAULT 'round',
+      UNIQUE KEY uq_table (restaurant_id, table_number)
+    )
+  `);
+
+  await mysqlPool.query(`
+    CREATE TABLE IF NOT EXISTS reservations (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      restaurant_id INT DEFAULT 1,
+      customer_name VARCHAR(255) NOT NULL,
+      customer_phone VARCHAR(50) DEFAULT '',
+      customer_email VARCHAR(255) DEFAULT '',
+      date VARCHAR(20) NOT NULL,
+      time_slot VARCHAR(10) NOT NULL,
+      party_size INT NOT NULL DEFAULT 2,
+      table_number INT DEFAULT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'confirmed',
+      notes TEXT DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Migrate missing columns on dishes
+  await migrateMysqlColumn('dishes', 'allergens', "VARCHAR(500) DEFAULT '[]'");
+  await migrateMysqlColumn('dishes', 'available_from', 'VARCHAR(10) DEFAULT NULL');
+  await migrateMysqlColumn('dishes', 'available_until', 'VARCHAR(10) DEFAULT NULL');
+  await migrateMysqlColumn('dishes', 'order_count', 'INT DEFAULT 0');
+
+  // Migrate missing columns on orders
+  await migrateMysqlColumn('orders', 'order_type', "VARCHAR(20) DEFAULT 'dine_in'");
+  await migrateMysqlColumn('orders', 'delivery_address', "VARCHAR(500) DEFAULT ''");
+  await migrateMysqlColumn('orders', 'delivery_phone', "VARCHAR(50) DEFAULT ''");
+  await migrateMysqlColumn('orders', 'customer_name', "VARCHAR(255) DEFAULT ''");
+  await migrateMysqlColumn('orders', 'ready_at', 'DATETIME');
+  await migrateMysqlColumn('reviews', 'restaurant_id', 'INT DEFAULT 1');
 }
 
 async function seedMysql() {

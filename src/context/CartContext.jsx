@@ -12,7 +12,7 @@ export function CartProvider({ children }) {
       if (existing) {
         return prev.map(i => i.id === dish.id ? { ...i, qty: i.qty + 1 } : i);
       }
-      return [...prev, { id: dish.id, name: dish.name, price: dish.price, image: dish.image, qty: 1 }];
+      return [...prev, { id: dish.id, dishId: dish.dishId ?? dish.id, formulaId: dish.formulaId, name: dish.name, price: dish.price, image: dish.image, qty: 1 }];
     });
   };
 

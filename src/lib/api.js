@@ -18,7 +18,13 @@ async function request(path, options = {}) {
   if (activeRestaurantId) headers['X-Restaurant-Id'] = activeRestaurantId;
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  const data = await res.json();
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { error: text?.startsWith('<!DOCTYPE') ? 'Erreur serveur' : text };
+  }
 
   if (!res.ok) {
     throw new Error(data.error || 'Erreur serveur');
@@ -48,6 +54,12 @@ export const updateDish = (id, data) =>
   request(`/menu/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const deleteDish = (id) =>
   request(`/menu/${id}`, { method: 'DELETE' });
+export const getFormulas = (restaurantId) => request(`/menu/formulas${restaurantId ? `?restaurantId=${encodeURIComponent(restaurantId)}` : ''}`);
+export const getAdminFormulas = () => request('/menu/formulas/all');
+export const createFormula = (formula) =>
+  request('/menu/formulas', { method: 'POST', body: JSON.stringify(formula) });
+export const deleteFormula = (id) =>
+  request(`/menu/formulas/${id}`, { method: 'DELETE' });
 
 // Orders
 export const createOrder = (order) =>
@@ -90,6 +102,31 @@ export async function exportOrdersCsv(from, to) {
   URL.revokeObjectURL(url);
 }
 
+// Reservations
+export const getReservationSlots = (date, restaurantId) =>
+  request(`/reservations/slots?date=${date}${restaurantId ? `&restaurantId=${restaurantId}` : ''}`);
+export const createReservation = (data) =>
+  request('/reservations', { method: 'POST', body: JSON.stringify(data) });
+export const checkReservation = (id) => request(`/reservations/check/${id}`);
+export const getReservations = (date) => request(`/reservations?date=${date || new Date().toISOString().split('T')[0]}`);
+export const updateReservation = (id, data) =>
+  request(`/reservations/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const deleteReservation = (id) =>
+  request(`/reservations/${id}`, { method: 'DELETE' });
+
+// Tables
+export const getTableStatus = () => request('/tables/status');
+export const saveTableLayout = (tables) =>
+  request('/tables/layout', { method: 'PUT', body: JSON.stringify({ tables }) });
+export const getTableOrders = (tableNumber) => request(`/tables/${tableNumber}/orders`);
+
+// Reviews
+export const submitReview = (orderId, table, ratings) =>
+  request('/reviews', { method: 'POST', body: JSON.stringify({ orderId, table, ratings }) });
+export const checkReviewed = (orderId) => request(`/reviews/check/${orderId}`);
+export const getReviews = () => request('/reviews');
+export const deleteReview = (id) => request(`/reviews/${id}`, { method: 'DELETE' });
+
 // Users
 export const getUsers = () => request('/users');
 export const createUser = (user) =>
@@ -112,6 +149,29 @@ export const getNetworkInfo = (restaurantId) => request(`/settings/network${rest
 export const getSettings = () => request('/settings');
 export const updateSettings = (data) =>
   request('/settings', { method: 'PATCH', body: JSON.stringify(data) });
+
+// Export / Integrations
+export async function exportOhada(from, to) {
+  const token = localStorage.getItem('token');
+  const headers = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const activeRestaurantId = getActiveRestaurantId();
+  if (activeRestaurantId) headers['X-Restaurant-Id'] = activeRestaurantId;
+
+  const res = await fetch(`${API_BASE}/export/ohada?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { headers });
+  if (!res.ok) throw new Error('Erreur export OHADA');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `journal-ohada-${from}-${to}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export const getReceiptJson = (orderId) => request(`/export/receipt/${orderId}/json`);
 
 // Maintenance / Super Admin
 export const getBackups = () => request('/maintenance/backups');

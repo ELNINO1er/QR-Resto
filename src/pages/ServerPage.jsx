@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { getOrders, getPublicSettings, updateOrderStatus, updatePayment } from '../lib/api';
 import { connectWs, disconnectWs, onWsMessage } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
+import { requestNotificationPermission, sendNotification } from '../lib/notifications';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -25,6 +26,8 @@ export default function ServerPage() {
   const refreshActiveOrders = useCallback(() => (
     getOrders().then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
   ), []);
+
+  useEffect(() => { requestNotificationPermission(); }, []);
 
   // Fix 11: Remove showNotif from deps
   useEffect(() => {
@@ -55,8 +58,12 @@ export default function ServerPage() {
           if (prev.some(o => o.id === data.order.id)) return prev;
           return [data.order, ...prev];
         });
+        sendNotification('Nouvelle commande', { body: `Table ${data.order.table}`, tag: `order-${data.order.id}` });
       }
       if (data.type === 'ORDER_UPDATED') {
+        if (data.order.status === 'ready') {
+          sendNotification('Commande prete', { body: `Table ${data.order.table} - Commande #${data.order.id} a servir`, tag: `ready-${data.order.id}` });
+        }
         setOrders(prev => {
           if (['served', 'cancelled'].includes(data.order.status)) {
             return prev.filter(o => o.id !== data.order.id);

@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { getOrders, updateOrderStatus } from '../lib/api';
 import { connectWs, disconnectWs, onWsMessage } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
+import { requestNotificationPermission, sendNotification } from '../lib/notifications';
 
 export default function KitchenPage() {
   const navigate = useNavigate();
@@ -16,6 +17,8 @@ export default function KitchenPage() {
   const refreshActiveOrders = useCallback(() => (
     getOrders().then(data => setOrders(data.filter(o => !['served', 'cancelled'].includes(o.status))))
   ), []);
+
+  useEffect(() => { requestNotificationPermission(); }, []);
 
   const playSound = useCallback(() => {
     if (!soundEnabled) return;
@@ -58,6 +61,7 @@ export default function KitchenPage() {
         });
         playSound();
         showNotif(`Nouvelle commande table ${data.order.table}`);
+        sendNotification('Nouvelle commande', { body: `Table ${data.order.table} - ${data.order.items?.length || 0} article(s)`, tag: `order-${data.order.id}` });
       }
       if (data.type === 'ORDER_UPDATED') {
         setOrders(prev => {

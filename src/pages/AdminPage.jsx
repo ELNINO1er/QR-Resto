@@ -5,7 +5,8 @@ import {
   ShoppingCart, Plus, Minus, Trash2, Edit, Bell, TrendingUp, Package,
   Clock, CheckCircle, X, ChefHat, Utensils, Home, Menu as MenuIcon,
   BarChart3, Settings, Eye, EyeOff, Save, AlertCircle, DollarSign,
-  QrCode, LogOut, Users, CreditCard, History, Printer, Download, KeyRound,
+  QrCode, LogOut, Users, CreditCard, History, Printer, Download, KeyRound, Calendar,
+  Star,
 } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useAuth } from '../context/AuthContext';
@@ -16,13 +17,19 @@ import {
   updateUser, deleteUser as apiDeleteUser, changePassword, getReports,
   exportOrdersCsv, getNetworkInfo, getRestaurants, createRestaurant,
   updateRestaurant, getBackups, createBackup, restoreBackup, exportDatabaseUrl,
-  getActiveRestaurantId, setActiveRestaurantId
+  getActiveRestaurantId, setActiveRestaurantId,
+  getTableStatus, saveTableLayout, getTableOrders,
+  getReservations, updateReservation, deleteReservation,
+  exportOhada, getReviews, deleteReview, getAdminFormulas,
+  createFormula, deleteFormula,
 } from '../lib/api';
 import { connectWs, onWsMessage, disconnectWs } from '../lib/ws';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishModal from '../components/DishModal';
 import DishImage from '../components/DishImage';
 import Dropdown from '../components/Dropdown';
+import { RevenueChart, PeakHoursChart, PaymentMethodsChart, ComparisonCard } from '../components/AnalyticsCharts';
+import FloorPlan, { TableDetailPanel } from '../components/FloorPlan';
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -61,6 +68,26 @@ export default function AdminPage() {
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [qrOrigin, setQrOrigin] = useState(window.location.origin);
+  const [floorTables, setFloorTables] = useState([]);
+  const [selectedFloorTable, setSelectedFloorTable] = useState(null);
+  const [tableOrders, setTableOrders] = useState([]);
+  const [editingLayout, setEditingLayout] = useState(false);
+  const [reservations, setReservations] = useState([]);
+  const [reservationDate, setReservationDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reviews, setReviews] = useState([]);
+  const [formulas, setFormulas] = useState([]);
+  const [newFormula, setNewFormula] = useState({
+    name: '',
+    description: '',
+    price: 0,
+    availableFrom: '',
+    availableUntil: '',
+    items: [
+      { category: 'entree', dishId: '', label: 'Entree' },
+      { category: 'plat', dishId: '', label: 'Plat' },
+      { category: 'dessert', dishId: '', label: 'Dessert' },
+    ],
+  });
 
   // Load data
   const loadData = useCallback(async () => {
@@ -194,6 +221,45 @@ export default function AdminPage() {
       setDishes(prev => prev.filter(d => d.id !== id));
       showNotif('Plat supprime', 'warning');
     } catch { showNotif('Erreur', 'warning'); }
+  };
+
+  const handleCreateFormula = async () => {
+    try {
+      const cleanItems = newFormula.items
+        .filter(item => item.dishId || item.label)
+        .map(item => ({ ...item, dishId: item.dishId ? Number(item.dishId) : null }));
+      const created = await createFormula({ ...newFormula, price: Number(newFormula.price), items: cleanItems });
+      setFormulas(prev => [...prev, created]);
+      setNewFormula({
+        name: '',
+        description: '',
+        price: 0,
+        availableFrom: '',
+        availableUntil: '',
+        items: [
+          { category: 'entree', dishId: '', label: 'Entree' },
+          { category: 'plat', dishId: '', label: 'Plat' },
+          { category: 'dessert', dishId: '', label: 'Dessert' },
+        ],
+      });
+      showNotif('Formule creee');
+    } catch (err) { showNotif(err.message || 'Erreur formule', 'warning'); }
+  };
+
+  const handleDeleteFormula = async (id) => {
+    try {
+      await deleteFormula(id);
+      setFormulas(prev => prev.filter(f => f.id !== id));
+      showNotif('Formule supprimee', 'warning');
+    } catch { showNotif('Erreur formule', 'warning'); }
+  };
+
+  const handleDeleteReview = async (id) => {
+    try {
+      await deleteReview(id);
+      setReviews(prev => prev.filter(r => r.id !== id));
+      showNotif('Avis supprime', 'warning');
+    } catch { showNotif('Erreur avis', 'warning'); }
   };
 
   const handleToggleAvailability = async (dish) => {
@@ -370,6 +436,15 @@ export default function AdminPage() {
     }
   };
 
+  const downloadOhada = async () => {
+    try {
+      await exportOhada(exportRange.from, exportRange.to);
+      showNotif('Export OHADA telecharge');
+    } catch {
+      showNotif('Erreur export OHADA', 'warning');
+    }
+  };
+
   const handleLogout = () => { logout(); navigate('/login'); };
 
   const activeRestaurant = restaurants.find(r => String(r.id) === String(activeRestaurantId));
@@ -385,8 +460,10 @@ export default function AdminPage() {
     { id: 'menu', icon: MenuIcon, label: 'Menu', roles: ['superadmin', 'admin'], tenantOnly: true },
     { id: 'stock', icon: Package, label: 'Stock', roles: ['superadmin', 'admin'], tenantOnly: true },
     { id: 'history', icon: History, label: 'Historique', roles: ['superadmin', 'admin', 'caisse'], tenantOnly: true },
+    { id: 'reviews', icon: Star, label: 'Avis', roles: ['superadmin', 'admin'], tenantOnly: true },
     { id: 'stats', icon: BarChart3, label: 'Statistiques', roles: ['superadmin', 'admin', 'caisse'], tenantOnly: true },
     { id: 'tables', icon: QrCode, label: 'Tables & QR', roles: ['superadmin', 'admin'], tenantOnly: true },
+    { id: 'reservations', icon: Calendar, label: 'Reservations', roles: ['superadmin', 'admin', 'serveur'], tenantOnly: true },
     { id: 'users', icon: Users, label: 'Utilisateurs', roles: ['superadmin', 'admin'] },
     { id: 'restaurants', icon: Home, label: 'Restaurants', roles: ['superadmin'] },
     { id: 'maintenance', icon: Download, label: 'Maintenance', roles: ['superadmin'] },
@@ -439,8 +516,30 @@ export default function AdminPage() {
     }
 
     generateQrCodes().catch(() => showNotif('Erreur de generation QR', 'warning'));
-    return () => { cancelled = true; };
+
+    // Load floor plan
+    getTableStatus().then(setFloorTables).catch(() => {});
+    const floorTimer = setInterval(() => {
+      getTableStatus().then(setFloorTables).catch(() => {});
+    }, 5000);
+
+    return () => { cancelled = true; clearInterval(floorTimer); };
   }, [adminTab, tablesCount, tableQrUrl, showNotif]);
+
+  useEffect(() => {
+    if (adminTab !== 'reservations') return;
+    getReservations(reservationDate).then(setReservations).catch(() => {});
+  }, [adminTab, reservationDate]);
+
+  useEffect(() => {
+    if (adminTab !== 'reviews') return;
+    getReviews().then(setReviews).catch(() => {});
+  }, [adminTab]);
+
+  useEffect(() => {
+    if (adminTab !== 'menu') return;
+    getAdminFormulas().then(setFormulas).catch(() => {});
+  }, [adminTab]);
 
   return (
     <div className="min-h-screen" style={{ background: colors.sand }}>
@@ -543,6 +642,12 @@ export default function AdminPage() {
                         <StatusIcon size={16} style={{ color: config.color }} />
                         <span className="text-sm font-medium" style={{ color: config.color }}>{config.label}</span>
                       </div>
+                      <div className="mb-3 text-xs px-3 py-2 rounded-lg" style={{ background: colors.sand, color: colors.text }}>
+                        <strong>{order.orderType === 'takeaway' ? 'A emporter' : order.orderType === 'delivery' ? 'Livraison' : 'Sur place'}</strong>
+                        {order.customerName && <span> - {order.customerName}</span>}
+                        {order.deliveryPhone && <div>{order.deliveryPhone}</div>}
+                        {order.deliveryAddress && <div>{order.deliveryAddress}</div>}
+                      </div>
                       <div className="space-y-1 mb-3">
                         {order.items.map((item, i) => (
                           <div key={i} className="flex justify-between text-sm">
@@ -634,6 +739,8 @@ export default function AdminPage() {
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
                           <button onClick={() => handleUpdatePayment(order, 'paid', 'cash', numericAmount)} disabled={!canPay || order.paymentStatus === 'paid'} className="px-3 py-1 rounded text-sm disabled:opacity-50" style={{ background: colors.primary, color: colors.cream }}>Confirmer recu</button>
+                          <button onClick={() => handleUpdatePayment(order, 'paid', 'mobile_money')} disabled={order.paymentStatus === 'paid'} className="px-3 py-1 rounded text-sm disabled:opacity-50" style={{ background: colors.gold, color: colors.primaryDark }}>Mobile Money</button>
+                          <button onClick={() => handleUpdatePayment(order, 'paid', 'card')} disabled={order.paymentStatus === 'paid'} className="px-3 py-1 rounded text-sm disabled:opacity-50" style={{ background: colors.sandDark, color: colors.text }}>Carte</button>
                           <button onClick={() => handleUpdatePayment(order, 'unpaid', '')} className="px-3 py-1 rounded text-sm" style={{ background: colors.sand, color: colors.text }}>Annuler</button>
                         </div>
                       </td>
@@ -659,6 +766,9 @@ export default function AdminPage() {
                 <input type="date" value={exportRange.to} onChange={e => setExportRange({ ...exportRange, to: e.target.value })} className="px-3 py-2 rounded-lg border" />
                 <button onClick={downloadExport} className="px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
                   <Download size={18} /> CSV
+                </button>
+                <button onClick={downloadOhada} className="px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.gold, color: colors.primaryDark }}>
+                  <Download size={18} /> OHADA
                 </button>
               </div>
             </div>
@@ -712,6 +822,41 @@ export default function AdminPage() {
               <button onClick={() => setShowAddDish(true)} className="px-4 py-2 rounded-lg font-medium flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
                 <Plus size={20} /> Ajouter un plat
               </button>
+            </div>
+            <div className="rounded-2xl p-4 shadow-md mb-6" style={{ background: 'white' }}>
+              <h3 className="font-bold mb-3" style={{ color: colors.text }}>Formules</h3>
+              <div className="grid lg:grid-cols-[1fr_120px] gap-3 mb-3">
+                <input placeholder="Nom de la formule" value={newFormula.name} onChange={e => setNewFormula({ ...newFormula, name: e.target.value })} className="px-3 py-2 rounded-lg border" />
+                <input type="number" placeholder="Prix" value={newFormula.price} onChange={e => setNewFormula({ ...newFormula, price: e.target.value })} className="px-3 py-2 rounded-lg border" />
+              </div>
+              <textarea placeholder="Description" value={newFormula.description} onChange={e => setNewFormula({ ...newFormula, description: e.target.value })} className="w-full px-3 py-2 rounded-lg border mb-3" rows="2" />
+              <div className="grid md:grid-cols-3 gap-2 mb-3">
+                {newFormula.items.map((item, index) => (
+                  <Dropdown
+                    key={index}
+                    value={item.dishId}
+                    onChange={dishId => setNewFormula(prev => ({ ...prev, items: prev.items.map((it, i) => i === index ? { ...it, dishId } : it) }))}
+                    options={[{ value: '', label: item.label }, ...dishes.map(d => ({ value: String(d.id), label: d.name }))]}
+                  />
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <input type="time" value={newFormula.availableFrom} onChange={e => setNewFormula({ ...newFormula, availableFrom: e.target.value })} className="px-3 py-2 rounded-lg border" />
+                <input type="time" value={newFormula.availableUntil} onChange={e => setNewFormula({ ...newFormula, availableUntil: e.target.value })} className="px-3 py-2 rounded-lg border" />
+              </div>
+              <button onClick={handleCreateFormula} className="px-4 py-2 rounded-lg font-medium mb-4" style={{ background: colors.primary, color: colors.cream }}>Creer la formule</button>
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {formulas.map(formula => (
+                  <div key={formula.id} className="rounded-xl p-3" style={{ background: colors.sand }}>
+                    <div className="flex justify-between gap-2">
+                      <strong style={{ color: colors.text }}>{formula.name}</strong>
+                      <span style={{ color: colors.primary }}>{Number(formula.price).toLocaleString()} FCFA</span>
+                    </div>
+                    <p className="text-xs mt-1" style={{ color: colors.textLight }}>{formula.items?.map(i => i.label || i.category).join(' + ')}</p>
+                    <button onClick={() => handleDeleteFormula(formula.id)} className="mt-2 text-xs px-2 py-1 rounded" style={{ background: '#EFD9D9', color: colors.primary }}>Supprimer</button>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
               {dishes.map(dish => (
@@ -804,6 +949,35 @@ export default function AdminPage() {
           </div>
         )}
 
+        {/* ===== REVIEWS ===== */}
+        {adminTab === 'reviews' && (
+          <div>
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Avis clients</h2>
+                <p style={{ color: colors.textLight }}>Notes et commentaires par plat</p>
+              </div>
+              <button onClick={() => getReviews().then(setReviews).catch(() => {})} className="px-4 py-2 rounded-lg font-medium" style={{ background: colors.primary, color: colors.cream }}>Actualiser</button>
+            </div>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {reviews.length === 0 && <p style={{ color: colors.textLight }}>Aucun avis pour le moment.</p>}
+              {reviews.map(review => (
+                <div key={review.id} className="rounded-2xl p-4 shadow-md" style={{ background: 'white' }}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div>
+                      <h3 className="font-bold" style={{ color: colors.text }}>{review.dish_name || `Plat #${review.dish_id}`}</h3>
+                      <p className="text-xs" style={{ color: colors.textLight }}>Commande #{review.order_id} - Table {review.table_number || '-'}</p>
+                    </div>
+                    <span className="text-sm font-bold" style={{ color: colors.gold }}>{review.rating}/5</span>
+                  </div>
+                  {review.comment && <p className="text-sm mb-3" style={{ color: colors.text }}>{review.comment}</p>}
+                  <button onClick={() => handleDeleteReview(review.id)} className="text-xs px-3 py-1 rounded" style={{ background: '#EFD9D9', color: colors.primary }}>Supprimer</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ===== STATS ===== */}
         {adminTab === 'stats' && (
           <div>
@@ -813,10 +987,10 @@ export default function AdminPage() {
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               {[
-                { label: 'Revenus du jour', value: `${stats.todayRevenue.toLocaleString()} FCFA`, icon: DollarSign, color: colors.primary },
-                { label: 'Commandes', value: stats.todayOrders, icon: ShoppingCart, color: colors.gold },
+                { label: 'Revenus du jour', value: `${stats.todayRevenue.toLocaleString()} FCFA`, icon: DollarSign, color: colors.primary, yesterday: stats.yesterdayRevenue, unit: ' FCFA' },
+                { label: 'Commandes', value: stats.todayOrders, icon: ShoppingCart, color: colors.gold, yesterday: stats.yesterdayOrders },
                 { label: 'Panier moyen', value: `${stats.avgOrder.toLocaleString()} FCFA`, icon: TrendingUp, color: colors.primaryLight },
-                { label: 'Stock bas', value: stats.lowStock, icon: AlertCircle, color: '#C77D32' },
+                { label: 'Temps moyen prep', value: stats.avgPrepTime ? `${stats.avgPrepTime} min` : '-', icon: Clock, color: '#5C8A4A' },
               ].map((stat, i) => (
                 <div key={i} className="rounded-2xl p-4 shadow-md" style={{ background: 'white' }}>
                   <div className="p-2 rounded-lg inline-block mb-3" style={{ background: stat.color + '20' }}>
@@ -824,9 +998,22 @@ export default function AdminPage() {
                   </div>
                   <p className="text-xs mb-1" style={{ color: colors.textLight }}>{stat.label}</p>
                   <p className="text-xl font-bold" style={{ color: colors.text }}>{stat.value}</p>
+                  {stat.yesterday != null && <ComparisonCard today={typeof stat.value === 'number' ? stat.value : (stat.label.includes('Revenus') ? stats.todayRevenue : stats.todayOrders)} yesterday={stat.yesterday} />}
                 </div>
               ))}
             </div>
+
+            <div className="grid lg:grid-cols-2 gap-4 mb-4">
+              <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
+                <h3 className="font-bold mb-4" style={{ color: colors.text }}>Revenus (7 derniers jours)</h3>
+                <RevenueChart data={stats.dailyRevenue} />
+              </div>
+              <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
+                <h3 className="font-bold mb-4" style={{ color: colors.text }}>Heures de pointe</h3>
+                <PeakHoursChart data={stats.peakHours} />
+              </div>
+            </div>
+
             <div className="grid lg:grid-cols-2 gap-4">
               <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
                 <h3 className="font-bold mb-4" style={{ color: colors.text }}>Top des plats</h3>
@@ -848,20 +1035,8 @@ export default function AdminPage() {
                 </div>
               </div>
               <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
-                <h3 className="font-bold mb-4" style={{ color: colors.text }}>Heures de pointe</h3>
-                <div className="space-y-2">
-                  {(stats.peakHours || []).length === 0 ? (
-                    <p className="text-sm" style={{ color: colors.textLight }}>Aucune commande enregistree</p>
-                  ) : (stats.peakHours || []).map((h, i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <span className="text-xs w-14" style={{ color: colors.textLight }}>{h.hour}</span>
-                      <div className="flex-1 h-6 rounded overflow-hidden" style={{ background: colors.sand }}>
-                        <div className="h-full rounded transition-all" style={{ width: `${h.val}%`, background: `linear-gradient(90deg, ${colors.primary}, ${colors.primaryLight})` }} />
-                      </div>
-                      <span className="text-xs font-medium w-8 text-right" style={{ color: colors.text }}>{h.count}</span>
-                    </div>
-                  ))}
-                </div>
+                <h3 className="font-bold mb-4" style={{ color: colors.text }}>Modes de paiement</h3>
+                <PaymentMethodsChart data={stats.paymentMethods} />
               </div>
             </div>
           </div>
@@ -872,27 +1047,129 @@ export default function AdminPage() {
           <div>
             <div className="mb-6">
               <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Tables & QR Codes</h2>
-              <p style={{ color: colors.textLight }}>Generez les QR codes pour chaque table</p>
-              <p className="text-sm mt-2 px-3 py-2 rounded-lg inline-block" style={{ background: 'white', color: colors.primary }}>
-                QR client: {qrOrigin}/t/N
-              </p>
-              <button onClick={printQrSheet} className="ml-3 px-4 py-2 rounded-lg font-medium inline-flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
-                <Printer size={18} /> Imprimer la feuille
-              </button>
+              <p style={{ color: colors.textLight }}>Plan de salle en temps reel et QR codes</p>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {Array.from({ length: tablesCount }, (_, i) => i + 1).map(num => (
-                <div key={num} className="rounded-2xl p-4 shadow-md text-center" style={{ background: 'white' }}>
-                  <div className="w-full aspect-square rounded-xl flex items-center justify-center mb-3" style={{ background: colors.sand }}>
-                    {qrCodes[num] ? (
-                      <img src={qrCodes[num]} alt={`QR table ${num}`} className="w-[88%] h-[88%] object-contain rounded-lg" />
-                    ) : (
-                      <QrCode size={80} style={{ color: colors.primary }} />
-                    )}
+
+            {/* Floor Plan */}
+            <div className="rounded-2xl p-6 shadow-md mb-6" style={{ background: 'white' }}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold" style={{ color: colors.text }}>Plan de salle</h3>
+                <div className="flex gap-2">
+                  {editingLayout ? (
+                    <>
+                      <button onClick={() => { saveTableLayout(floorTables).then(() => { showNotif('Disposition sauvegardee'); setEditingLayout(false); }).catch(() => showNotif('Erreur', 'warning')); }} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: '#5C8A4A', color: 'white' }}>
+                        <Save size={14} className="inline mr-1" /> Sauvegarder
+                      </button>
+                      <button onClick={() => setEditingLayout(false)} className="px-3 py-1 rounded-lg text-sm" style={{ background: colors.sand }}>Annuler</button>
+                    </>
+                  ) : (
+                    <button onClick={() => setEditingLayout(true)} className="px-3 py-1 rounded-lg text-sm font-medium" style={{ background: colors.sand, color: colors.text }}>
+                      <Edit size={14} className="inline mr-1" /> Modifier
+                    </button>
+                  )}
+                </div>
+              </div>
+              <FloorPlan
+                tables={floorTables}
+                editable={editingLayout}
+                onTableClick={(table) => {
+                  setSelectedFloorTable(table);
+                  if (table.status !== 'free') {
+                    getTableOrders(table.number).then(setTableOrders).catch(() => setTableOrders([]));
+                  } else {
+                    setTableOrders([]);
+                  }
+                }}
+                onLayoutChange={(number, x, y) => {
+                  setFloorTables(prev => prev.map(t => t.number === number ? { ...t, x, y } : t));
+                }}
+              />
+            </div>
+
+            {/* Table Detail */}
+            {selectedFloorTable && (
+              <div className="mb-6">
+                <TableDetailPanel
+                  table={selectedFloorTable}
+                  orders={tableOrders}
+                  onClose={() => setSelectedFloorTable(null)}
+                  currency={settings.currency || 'FCFA'}
+                />
+              </div>
+            )}
+
+            {/* QR Codes */}
+            <div className="rounded-2xl p-6 shadow-md" style={{ background: 'white' }}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold" style={{ color: colors.text }}>QR Codes</h3>
+                <div className="flex gap-2">
+                  <span className="text-sm px-3 py-2 rounded-lg" style={{ background: colors.sand, color: colors.primary }}>
+                    {qrOrigin}/t/N
+                  </span>
+                  <button onClick={printQrSheet} className="px-4 py-2 rounded-lg font-medium inline-flex items-center gap-2" style={{ background: colors.primary, color: colors.cream }}>
+                    <Printer size={18} /> Imprimer
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {Array.from({ length: tablesCount }, (_, i) => i + 1).map(num => (
+                  <div key={num} className="rounded-2xl p-4 shadow-md text-center" style={{ background: colors.sand }}>
+                    <div className="w-full aspect-square rounded-xl flex items-center justify-center mb-3" style={{ background: 'white' }}>
+                      {qrCodes[num] ? (
+                        <img src={qrCodes[num]} alt={`QR table ${num}`} className="w-[88%] h-[88%] object-contain rounded-lg" />
+                      ) : (
+                        <QrCode size={80} style={{ color: colors.primary }} />
+                      )}
+                    </div>
+                    <h3 className="font-bold mb-1" style={{ color: colors.text }}>Table {num}</h3>
                   </div>
-                  <h3 className="font-bold mb-1" style={{ color: colors.text }}>Table {num}</h3>
-                  <p className="text-xs mb-3 break-all" style={{ color: colors.textLight }}>{tableQrUrl(num)}</p>
-                  <button className="w-full py-2 rounded-lg text-xs font-medium" style={{ background: colors.primary, color: colors.cream }}>Imprimer</button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ===== RESERVATIONS ===== */}
+        {adminTab === 'reservations' && (
+          <div>
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold mb-1" style={{ color: colors.text }}>Reservations</h2>
+              <p style={{ color: colors.textLight }}>Gerez les reservations de vos clients</p>
+            </div>
+            <div className="flex items-center gap-3 mb-4">
+              <input type="date" value={reservationDate} onChange={e => { setReservationDate(e.target.value); getReservations(e.target.value).then(setReservations).catch(() => {}); }} className="px-4 py-2 rounded-lg border-2 focus:outline-none" style={{ borderColor: colors.sandDark }} />
+              <button onClick={() => getReservations(reservationDate).then(setReservations).catch(() => {})} className="px-4 py-2 rounded-lg font-medium" style={{ background: colors.primary, color: colors.cream }}>Actualiser</button>
+              <span className="text-sm" style={{ color: colors.textLight }}>{reservations.length} reservation(s)</span>
+            </div>
+            <div className="space-y-3">
+              {reservations.length === 0 && <p style={{ color: colors.textLight }}>Aucune reservation pour cette date.</p>}
+              {reservations.map(r => (
+                <div key={r.id} className="rounded-2xl p-5 shadow-md flex items-start justify-between" style={{ background: 'white' }}>
+                  <div>
+                    <h3 className="font-bold text-lg" style={{ color: colors.text }}>{r.customer_name}</h3>
+                    <p className="text-sm" style={{ color: colors.textLight }}>
+                      {r.time_slot} - {r.party_size} personne(s)
+                      {r.table_number && ` - Table ${r.table_number}`}
+                    </p>
+                    {r.customer_phone && <p className="text-sm" style={{ color: colors.textLight }}>{r.customer_phone}</p>}
+                    {r.notes && <p className="text-sm mt-1 px-3 py-1 rounded" style={{ background: colors.sand, color: colors.text }}>{r.notes}</p>}
+                  </div>
+                  <div className="flex flex-col gap-2 items-end">
+                    <span className="text-xs px-2 py-1 rounded-full font-medium" style={{
+                      background: r.status === 'confirmed' ? colors.gold + '20' : r.status === 'seated' ? '#5C8A4A20' : r.status === 'cancelled' ? '#d32f2f20' : colors.sand,
+                      color: r.status === 'confirmed' ? colors.gold : r.status === 'seated' ? '#5C8A4A' : r.status === 'cancelled' ? '#d32f2f' : colors.text,
+                    }}>
+                      {r.status === 'confirmed' ? 'Confirmee' : r.status === 'arrived' ? 'Arrivee' : r.status === 'seated' ? 'Installee' : r.status === 'completed' ? 'Terminee' : r.status === 'cancelled' ? 'Annulee' : r.status === 'no_show' ? 'Non venue' : r.status}
+                    </span>
+                    <div className="flex gap-1">
+                      {r.status === 'confirmed' && (
+                        <button onClick={() => updateReservation(r.id, { status: 'seated' }).then(() => getReservations(reservationDate).then(setReservations)).catch(() => showNotif('Erreur', 'warning'))} className="text-xs px-2 py-1 rounded" style={{ background: '#5C8A4A', color: 'white' }}>Installer</button>
+                      )}
+                      {r.status !== 'cancelled' && r.status !== 'completed' && (
+                        <button onClick={() => updateReservation(r.id, { status: 'cancelled' }).then(() => getReservations(reservationDate).then(setReservations)).catch(() => showNotif('Erreur', 'warning'))} className="text-xs px-2 py-1 rounded" style={{ background: '#d32f2f20', color: '#d32f2f' }}>Annuler</button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

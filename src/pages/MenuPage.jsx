@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { ShoppingCart, Plus, Minus, X, Search, Filter, Star, Clock, ArrowLeft, QrCode, CheckCircle } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, X, Search, Filter, Star, Clock, ArrowLeft, QrCode, CheckCircle, Calendar } from 'lucide-react';
 import { colors } from '../lib/colors';
 import { useCart } from '../context/CartContext';
-import { getMenu, createOrder, getPublicSettings, getNetworkInfo, getPublicOrder } from '../lib/api';
+import { getMenu, getFormulas, createOrder, getPublicSettings, getNetworkInfo, getPublicOrder, checkReviewed } from '../lib/api';
+import ReviewModal from '../components/ReviewModal';
 import { NotificationBanner, useNotification } from '../components/Notification';
 import DishImage from '../components/DishImage';
 import Dropdown from '../components/Dropdown';
@@ -26,6 +27,13 @@ const categories = [
   { id: 'boissons', name: 'Boissons', icon: '🥤' },
 ];
 
+const ALLERGEN_LABELS = {
+  gluten: 'Gluten', crustaces: 'Crustaces', oeufs: 'Oeufs', poisson: 'Poisson',
+  arachides: 'Arachides', soja: 'Soja', lait: 'Lait', fruits_a_coque: 'Fruits a coque',
+  celeri: 'Celeri', moutarde: 'Moutarde', sesame: 'Sesame', sulfites: 'Sulfites',
+  lupin: 'Lupin', mollusques: 'Mollusques',
+};
+
 export default function MenuPage() {
   const [searchParams] = useSearchParams();
   const { cart, tableNumber, setTableNumber, addToCart, updateQty, cartTotal, cartCount, clearCart } = useCart();
@@ -33,6 +41,7 @@ export default function MenuPage() {
   const restaurantId = searchParams.get('restaurantId') || '1';
 
   const [dishes, setDishes] = useState([]);
+  const [formulas, setFormulas] = useState([]);
   const [restaurantName, setRestaurantName] = useState('Resto QR');
   const [publicSettings, setPublicSettings] = useState({});
   const [tablesCount, setTablesCount] = useState(12);
@@ -50,6 +59,12 @@ export default function MenuPage() {
   const [tableQr, setTableQr] = useState('');
   const [lastOrder, setLastOrder] = useState(null);
   const [menuUnavailable, setMenuUnavailable] = useState('');
+  const [showReview, setShowReview] = useState(false);
+  const [reviewed, setReviewed] = useState(false);
+  const [orderType, setOrderType] = useState('dine_in');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [deliveryPhone, setDeliveryPhone] = useState('');
+  const [customerName, setCustomerName] = useState('');
 
   // Get table number from URL
   useEffect(() => {
@@ -85,6 +100,7 @@ export default function MenuPage() {
         showNotif(err.message || 'Menu indisponible', 'warning');
       })
       .finally(() => setLoading(false));
+    getFormulas(restaurantId).then(setFormulas).catch(() => setFormulas([]));
   }, [restaurantId]);
 
   useEffect(() => {
@@ -118,6 +134,11 @@ export default function MenuPage() {
     return () => clearInterval(timer);
   }, [lastOrder?.id, tableNumber]);
 
+  useEffect(() => {
+    if (!lastOrder?.id) return;
+    checkReviewed(lastOrder.id).then(r => setReviewed(r.reviewed)).catch(() => {});
+  }, [lastOrder?.id]);
+
   const filteredDishes = dishes.filter(d => {
     if (d.visible === false) return false;
     if (selectedCategory !== 'all' && d.category !== selectedCategory) return false;
@@ -133,6 +154,11 @@ export default function MenuPage() {
     showNotif(`${dish.name} ajoute au panier`);
   };
 
+  const handleAddFormula = (formula) => {
+    addToCart({ id: `formula-${formula.id}`, formulaId: formula.id, dishId: null, name: formula.name, price: formula.price, image: formula.image });
+    showNotif(`${formula.name} ajoutee au panier`);
+  };
+
   const submitOrder = async () => {
     if (!tableNumber) {
       showNotif('Numero de table manquant', 'warning');
@@ -143,9 +169,14 @@ export default function MenuPage() {
     try {
       const order = await createOrder({
         table: tableNumber,
-        items: cart.map(i => ({ dishId: i.id, name: i.name, quantity: i.qty, price: i.price })),
+        items: cart.map(i => i.formulaId
+          ? { formulaId: i.formulaId, name: i.name, quantity: i.qty, price: i.price }
+          : { dishId: i.dishId || i.id, name: i.name, quantity: i.qty, price: i.price }),
         notes: orderNotes,
         restaurantId,
+        orderType,
+        ...(orderType === 'delivery' ? { deliveryAddress, deliveryPhone, customerName } : {}),
+        ...(orderType === 'takeaway' ? { customerName } : {}),
         ...(declaredCash != null ? { cashAmount: declaredCash } : {}),
       });
       setLastOrder(order);
@@ -271,7 +302,9 @@ export default function MenuPage() {
             <h1 className="text-lg font-bold" style={{ color: colors.cream, fontFamily: 'serif' }}>{restaurantName}</h1>
             <p className="text-xs" style={{ color: colors.sandDark }}>Table {tableNumber}</p>
           </div>
-          <div className="w-16" />
+          <a href={`/reservation?restaurantId=${restaurantId}`} className="text-xs px-3 py-1 rounded-lg" style={{ background: colors.gold, color: colors.primaryDark }}>
+            <Calendar size={12} className="inline mr-1" />Reserver
+          </a>
         </div>
       </div>
 
@@ -310,8 +343,24 @@ export default function MenuPage() {
                 Imprimer la facture
               </button>
             )}
+            {['ready', 'served'].includes(lastOrder.status) && !reviewed && (
+              <button onClick={() => setShowReview(true)} className="mt-3 w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2" style={{ background: colors.gold, color: colors.primaryDark }}>
+                <Star size={18} /> Notez votre repas
+              </button>
+            )}
+            {reviewed && (
+              <p className="mt-3 text-sm text-center font-medium" style={{ color: '#5C8A4A' }}>Merci pour votre avis !</p>
+            )}
             {lastOrder.status === 'cancelled' && <p className="text-sm mt-3" style={{ color: colors.primary }}>Commande annulee. Contactez le personnel.</p>}
           </div>
+        )}
+
+        {showReview && lastOrder && (
+          <ReviewModal
+            order={lastOrder}
+            onClose={() => setShowReview(false)}
+            onSubmitted={() => { setShowReview(false); setReviewed(true); }}
+          />
         )}
 
         {/* Search & Filters */}
@@ -354,6 +403,24 @@ export default function MenuPage() {
               {menuUnavailable}
             </div>
           )}
+          {selectedCategory === 'all' && formulas.map(formula => (
+            <div key={`formula-${formula.id}`} className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white' }}>
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <span className="text-xs px-2 py-1 rounded-full font-medium" style={{ background: colors.gold + '30', color: colors.gold }}>Formule</span>
+                    <h3 className="font-bold text-base mt-2" style={{ color: colors.text }}>{formula.name}</h3>
+                  </div>
+                  <span className="font-bold text-lg" style={{ color: colors.primary }}>{Number(formula.price).toLocaleString()} FCFA</span>
+                </div>
+                {formula.description && <p className="text-xs mb-2" style={{ color: colors.textLight }}>{formula.description}</p>}
+                <p className="text-xs mb-3" style={{ color: colors.textLight }}>{formula.items?.map(i => i.label || i.category).join(' + ')}</p>
+                <button onClick={() => handleAddFormula(formula)} className="w-full py-2 rounded-lg font-bold" style={{ background: colors.primary, color: colors.cream }}>
+                  Ajouter la formule
+                </button>
+              </div>
+            </div>
+          ))}
           {filteredDishes.map(dish => (
             <div key={dish.id} className="rounded-2xl overflow-hidden shadow-md" style={{ background: 'white', opacity: dish.available ? 1 : 0.5 }}>
               <div className="flex">
@@ -369,12 +436,22 @@ export default function MenuPage() {
                     </div>
                   </div>
                   <p className="text-xs mb-2 line-clamp-2" style={{ color: colors.textLight }}>{dish.description}</p>
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-2 mb-1">
                     <Clock size={12} style={{ color: colors.textLight }} />
                     <span className="text-xs" style={{ color: colors.textLight }}>{dish.prepTime} min</span>
                     {dish.veg && <span className="text-xs">🌱</span>}
                     {dish.spicy && <span className="text-xs">🌶️</span>}
+                    {dish.orderCount > 20 && <span className="text-xs px-1 rounded" style={{ background: colors.gold + '30', color: colors.gold }}>Populaire</span>}
                   </div>
+                  {dish.allergens?.length > 0 && (
+                    <div className="flex gap-1 flex-wrap mb-1">
+                      {dish.allergens.map(a => (
+                        <span key={a} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: '#FFF3E0', color: '#E65100' }}>
+                          {ALLERGEN_LABELS[a] || a}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-lg" style={{ color: colors.primary }}>{dish.price.toLocaleString()} FCFA</span>
                     {dish.available ? (
@@ -435,6 +512,32 @@ export default function MenuPage() {
                   </div>
                 </div>
               ))}
+              {/* Order Type */}
+              <div className="rounded-xl p-3" style={{ background: 'white' }}>
+                <label className="block text-sm font-medium mb-2" style={{ color: colors.text }}>Type de commande</label>
+                <div className="flex gap-2">
+                  {[
+                    { value: 'dine_in', label: 'Sur place' },
+                    { value: 'takeaway', label: 'A emporter' },
+                    { value: 'delivery', label: 'Livraison' },
+                  ].map(t => (
+                    <button key={t.value} onClick={() => setOrderType(t.value)} className="flex-1 py-2 rounded-lg text-sm font-medium transition-all" style={{ background: orderType === t.value ? colors.primary : colors.sand, color: orderType === t.value ? colors.cream : colors.text }}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                {(orderType === 'takeaway' || orderType === 'delivery') && (
+                  <div className="mt-3 space-y-2">
+                    <input type="text" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Votre nom" className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none" style={{ borderColor: colors.sandDark }} />
+                  </div>
+                )}
+                {orderType === 'delivery' && (
+                  <div className="mt-2 space-y-2">
+                    <input type="tel" value={deliveryPhone} onChange={e => setDeliveryPhone(e.target.value)} placeholder="Telephone" className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none" style={{ borderColor: colors.sandDark }} />
+                    <textarea value={deliveryAddress} onChange={e => setDeliveryAddress(e.target.value)} placeholder="Adresse de livraison" className="w-full px-3 py-2 rounded-lg border text-sm focus:outline-none" style={{ borderColor: colors.sandDark }} rows={2} />
+                  </div>
+                )}
+              </div>
               <div>
                 <label className="block text-sm font-medium mb-1" style={{ color: colors.text }}>Notes speciales</label>
                 <textarea value={orderNotes} onChange={e => setOrderNotes(e.target.value)} placeholder="Sans oignons, bien cuit, allergies..." className="w-full px-3 py-2 rounded-lg border-2 focus:outline-none text-sm" style={{ borderColor: colors.sandDark, background: 'white' }} rows="2" />

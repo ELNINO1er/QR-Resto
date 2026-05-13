@@ -46,6 +46,11 @@ function formatOrder(o, items) {
     changeDue: o.change_due || 0,
     paidAt: o.paid_at,
     notes: o.notes,
+    orderType: o.order_type || 'dine_in',
+    deliveryAddress: o.delivery_address || '',
+    deliveryPhone: o.delivery_phone || '',
+    customerName: o.customer_name || '',
+    readyAt: o.ready_at,
     time: formatTime(o.created_at),
     createdAt: o.created_at,
   };
@@ -56,10 +61,32 @@ function toPositiveInt(value) {
   return Number.isInteger(number) && number > 0 ? number : null;
 }
 
+function isAvailableNow(from, until) {
+  if (!from && !until) return true;
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  if (from && hhmm < from) return false;
+  if (until && hhmm > until) return false;
+  return true;
+}
+
 function buildOrderItems(rawItems) {
   const merged = new Map();
+  const formulas = [];
 
   for (const item of rawItems) {
+    const formulaId = toPositiveInt(item.formulaId);
+    if (formulaId) {
+      const quantity = toPositiveInt(item.quantity);
+      if (!quantity) {
+        const error = new Error('Articles invalides');
+        error.status = 400;
+        throw error;
+      }
+      formulas.push({ formulaId, quantity });
+      continue;
+    }
+
     const dishId = toPositiveInt(item.dishId);
     const quantity = toPositiveInt(item.quantity);
 
@@ -72,7 +99,10 @@ function buildOrderItems(rawItems) {
     merged.set(dishId, (merged.get(dishId) || 0) + quantity);
   }
 
-  return [...merged.entries()].map(([dishId, quantity]) => ({ dishId, quantity }));
+  return [
+    ...[...merged.entries()].map(([dishId, quantity]) => ({ type: 'dish', dishId, quantity })),
+    ...formulas.map(f => ({ type: 'formula', ...f })),
+  ];
 }
 
 // Fix 5: Validate table number against tables_count setting
@@ -105,6 +135,34 @@ async function validateOrder(table, items, restaurantId = 1) {
   let total = 0;
 
   for (const item of cleanItems) {
+    if (item.type === 'formula') {
+      const formula = await queryOne('SELECT * FROM formulas WHERE id = ? AND restaurant_id = ? AND available = 1', [item.formulaId, restaurantId]);
+      if (!formula || !isAvailableNow(formula.available_from, formula.available_until)) {
+        const error = new Error('Formule indisponible');
+        error.status = 409;
+        throw error;
+      }
+      const formulaItems = await queryAll('SELECT fi.*, d.name, d.stock, d.available, d.visible, d.available_from, d.available_until FROM formula_items fi LEFT JOIN dishes d ON d.id = fi.dish_id WHERE fi.formula_id = ?', [formula.id]);
+      for (const fi of formulaItems.filter(i => i.dish_id)) {
+        const visible = fi.visible == null ? 1 : fi.visible;
+        if (!visible || !fi.available || fi.stock < item.quantity || !isAvailableNow(fi.available_from, fi.available_until)) {
+          const error = new Error(`${fi.name || 'Element de formule'} est indisponible`);
+          error.status = 409;
+          throw error;
+        }
+      }
+      orderItems.push({
+        formulaId: formula.id,
+        dishId: null,
+        name: formula.name,
+        quantity: item.quantity,
+        price: formula.price,
+        components: formulaItems.filter(i => i.dish_id).map(i => ({ dishId: i.dish_id, quantity: item.quantity })),
+      });
+      total += formula.price * item.quantity;
+      continue;
+    }
+
     const dish = await queryOne('SELECT * FROM dishes WHERE id = ? AND restaurant_id = ?', [item.dishId, restaurantId]);
     if (!dish) {
       const error = new Error('Plat introuvable');
@@ -112,7 +170,7 @@ async function validateOrder(table, items, restaurantId = 1) {
       throw error;
     }
     const visible = dish.visible == null ? 1 : dish.visible;
-    if (!visible || !dish.available || dish.stock <= 0) {
+    if (!visible || !dish.available || dish.stock <= 0 || !isAvailableNow(dish.available_from, dish.available_until)) {
       const error = new Error(`${dish.name} est indisponible`);
       error.status = 409;
       throw error;
@@ -155,7 +213,9 @@ function restoreStockItems(items) {
 
 // Fix 1+6+14: cashAmount is optional (declaration), payment_status coherent, accept decimals
 router.post('/', async (req, res) => {
-  const { table, items, notes, cashAmount } = req.body;
+  const { table, items, notes, cashAmount, orderType, deliveryAddress, deliveryPhone, customerName } = req.body;
+  const validOrderTypes = ['dine_in', 'takeaway', 'delivery'];
+  const cleanOrderType = validOrderTypes.includes(orderType) ? orderType : 'dine_in';
   const restaurantId = requestedRestaurantId(req) || 1;
   const restaurant = await getRestaurantOrNull(restaurantId);
   if (!restaurant) return res.status(404).json({ error: 'Restaurant introuvable' });
@@ -185,8 +245,8 @@ router.post('/', async (req, res) => {
 
   const orderId = await transaction(async () => {
     const inserted = await runNoSave(
-      'INSERT INTO orders (restaurant_id, table_number, total, status, payment_status, payment_method, amount_paid, change_due, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [restaurantId, validated.tableNumber, validated.total, 'pending', paymentStatus, paymentMethod, declaredCash, expectedChange, notes || '']
+      'INSERT INTO orders (restaurant_id, table_number, total, status, payment_status, payment_method, amount_paid, change_due, notes, order_type, delivery_address, delivery_phone, customer_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [restaurantId, validated.tableNumber, validated.total, 'pending', paymentStatus, paymentMethod, declaredCash, expectedChange, notes || '', cleanOrderType, (deliveryAddress || '').slice(0, 500), (deliveryPhone || '').slice(0, 20), (customerName || '').slice(0, 100)]
     );
 
     const oid = inserted?.lastInsertRowid || (await queryOne('SELECT last_insert_rowid() as id')).id;
@@ -195,10 +255,22 @@ router.post('/', async (req, res) => {
       await runNoSave('INSERT INTO order_items (order_id, dish_id, name, quantity, price) VALUES (?,?,?,?,?)',
         [oid, item.dishId, item.name, item.quantity, item.price]);
 
+      for (const component of item.components || []) {
+        const componentDish = await queryOne('SELECT name FROM dishes WHERE id = ?', [component.dishId]);
+        await runNoSave('INSERT INTO order_items (order_id, dish_id, name, quantity, price) VALUES (?,?,?,?,?)',
+          [oid, component.dishId, componentDish?.name || 'Element formule', component.quantity, 0]);
+      }
+
       await runNoSave(
-        'UPDATE dishes SET stock = stock - ?, available = CASE WHEN stock - ? > 0 THEN available ELSE 0 END WHERE id = ?',
-        [item.quantity, item.quantity, item.dishId]
+        'UPDATE dishes SET stock = stock - ?, available = CASE WHEN stock - ? > 0 THEN available ELSE 0 END, order_count = COALESCE(order_count, 0) + ? WHERE id = ?',
+        [item.quantity, item.quantity, item.quantity, item.dishId]
       );
+      for (const component of item.components || []) {
+        await runNoSave(
+          'UPDATE dishes SET stock = stock - ?, available = CASE WHEN stock - ? > 0 THEN available ELSE 0 END, order_count = COALESCE(order_count, 0) + ? WHERE id = ?',
+          [component.quantity, component.quantity, component.quantity, component.dishId]
+        );
+      }
     }
     return oid;
   });
@@ -255,6 +327,39 @@ router.get('/stats', authMiddleware, requireActiveRestaurant, requireRoles('admi
     val: Math.round((h.count / maxHourCount) * 100),
   }));
 
+  // Yesterday comparison
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+  const yesterdayOrders = await queryOne(
+    `SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as revenue FROM orders WHERE date(created_at) = date(?) AND status != 'cancelled'${scope.clause}`, [yesterday, ...scope.params]
+  );
+
+  // Average prep time (pending -> ready)
+  const avgPrepTime = await queryOne(isMysql() ? `
+    SELECT AVG(TIMESTAMPDIFF(MINUTE, created_at, ready_at)) as avg_minutes
+    FROM orders WHERE status IN ('ready', 'served') AND ready_at IS NOT NULL AND date(created_at) = date(?)${scope.clause}
+  ` : `
+    SELECT AVG((julianday(ready_at) - julianday(created_at)) * 1440) as avg_minutes
+    FROM orders WHERE status IN ('ready', 'served') AND ready_at IS NOT NULL AND date(created_at) = date(?)${scope.clause}
+  `, [today, ...scope.params]);
+
+  // Revenue by day (last 7 days)
+  const dailyRevenue = await queryAll(isMysql() ? `
+    SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as day, COUNT(*) as orders, COALESCE(SUM(total), 0) as revenue
+    FROM orders WHERE status != 'cancelled' AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)${scope.clause}
+    GROUP BY day ORDER BY day
+  ` : `
+    SELECT date(created_at) as day, COUNT(*) as orders, COALESCE(SUM(total), 0) as revenue
+    FROM orders WHERE status != 'cancelled' AND created_at >= date('now', '-7 days')${scope.clause}
+    GROUP BY day ORDER BY day
+  `, scope.params);
+
+  // Payment methods breakdown
+  const paymentMethods = await queryAll(`
+    SELECT payment_method, COUNT(*) as count, COALESCE(SUM(total), 0) as revenue
+    FROM orders WHERE payment_status = 'paid' AND date(created_at) = date(?)${scope.clause}
+    GROUP BY payment_method
+  `, [today, ...scope.params]);
+
   res.json({
     todayRevenue: todayOrders.revenue,
     todayOrders: todayOrders.count,
@@ -262,6 +367,11 @@ router.get('/stats', authMiddleware, requireActiveRestaurant, requireRoles('admi
     lowStock: lowStock.count,
     topDishes,
     peakHours,
+    yesterdayRevenue: yesterdayOrders.revenue,
+    yesterdayOrders: yesterdayOrders.count,
+    avgPrepTime: Math.round(avgPrepTime?.avg_minutes || 0),
+    dailyRevenue,
+    paymentMethods,
   });
 });
 
@@ -403,7 +513,11 @@ router.patch('/:id', authMiddleware, requireActiveRestaurant, requireRoles('admi
 
   await transaction(async () => {
     if (status === 'cancelled' && existing.status !== 'cancelled') await restoreStock(req.params.id);
-    await runNoSave('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id]);
+    if (status === 'ready' && existing.status !== 'ready') {
+      await runNoSave('UPDATE orders SET status = ?, ready_at = COALESCE(ready_at, ?) WHERE id = ?', [status, new Date().toISOString(), req.params.id]);
+    } else {
+      await runNoSave('UPDATE orders SET status = ? WHERE id = ?', [status, req.params.id]);
+    }
   });
 
   const order = await getOrderById(req.params.id);

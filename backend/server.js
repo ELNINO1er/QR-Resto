@@ -14,6 +14,10 @@ import settingsRoutes from './routes/settings.js';
 import userRoutes from './routes/users.js';
 import restaurantRoutes from './routes/restaurants.js';
 import maintenanceRoutes, { scheduleAutomaticBackups } from './routes/maintenance.js';
+import reviewRoutes from './routes/reviews.js';
+import tableRoutes from './routes/tables.js';
+import reservationRoutes from './routes/reservations.js';
+import exportRoutes from './routes/export.js';
 import { verifyToken } from './middleware/auth.js';
 import { openApiSpec } from './openapi.js';
 
@@ -67,6 +71,10 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/restaurants', restaurantRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/tables', tableRoutes);
+app.use('/api/reservations', reservationRoutes);
+app.use('/api/export', exportRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -108,11 +116,10 @@ server.on('upgrade', (req, socket, head) => {
 
   const legacyToken = url.searchParams.get('token');
   let authenticated = false;
+  let legacyPayload = null;
   if (legacyToken) {
     try {
-      const payload = verifyToken(legacyToken);
-      ws._restaurantId = payload.restaurantId || 1;
-      ws._role = payload.role;
+      legacyPayload = verifyToken(legacyToken);
       authenticated = true;
     } catch {
       // Will require first-message auth
@@ -121,6 +128,10 @@ server.on('upgrade', (req, socket, head) => {
 
   wss.handleUpgrade(req, socket, head, (ws) => {
     ws._authenticated = authenticated;
+    if (legacyPayload) {
+      ws._restaurantId = legacyPayload.restaurantId || 1;
+      ws._role = legacyPayload.role;
+    }
     wss.emit('connection', ws, req);
   });
 });
